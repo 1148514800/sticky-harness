@@ -1,0 +1,130 @@
+:root {
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1f2328;
+  background-color: #f4f5f7;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.note-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  margin: 10px;
+  overflow: hidden;
+  background-color: #ffffff;
+  border: 1px solid #e2e4e8;
+  border-radius: 10px;
+}
+
+.note-shell__header {
+  padding: 12px 16px 0;
+}
+
+.note-shell__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1f2328;
+}
+
+.note-shell__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+}
+
+.note-shell__phase {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a9099;
+}
+
+.note-shell__status,
+.note-shell__label {
+  margin: 0;
+  color: #3a4046;
+}
+
+.note-shell__label {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.dev-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.dev-toolbar button {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font: inherit;
+  color: #1f2328;
+  cursor: pointer;
+  background-color: #f4f5f7;
+  border: 1px solid #d7dade;
+  border-radius: 6px;
+}
+
+.dev-toolbar button:hover:not(:disabled) {
+  background-color: #eceef1;
+}
+
+.dev-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.dev-toolbar__error {
+  margin: 0;
+  font-size: 12px;
+  color: #b42318;
+}
+
+.path-info {
+  margin: auto 0 0;
+  padding-top: 10px;
+  border-top: 1px solid #eceef1;
+}
+
+.path-info dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #8a9099;
+}
+
+.path-info dd {
+  margin: 2px 0 0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: #3a4046;
+}
