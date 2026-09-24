@@ -3,7 +3,7 @@
   font-size: 14px;
   line-height: 1.5;
   color: #1f2328;
-  background-color: #f4f5f7;
+  background-color: #ffffff;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -22,109 +22,74 @@ body {
   overflow: hidden;
 }
 
-.note-shell {
+.note {
   display: flex;
   flex-direction: column;
   height: 100%;
-  margin: 10px;
-  overflow: hidden;
   background-color: #ffffff;
-  border: 1px solid #e2e4e8;
-  border-radius: 10px;
 }
 
-.note-shell__header {
-  padding: 12px 16px 0;
-}
-
-.note-shell__title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: #1f2328;
-}
-
-.note-shell__body {
+.note__bar {
   display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 16px 16px;
-  overflow-y: auto;
-}
-
-.note-shell__phase {
-  margin: 0;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #8a9099;
-}
-
-.note-shell__status,
-.note-shell__label {
-  margin: 0;
-  color: #3a4046;
-}
-
-.note-shell__label {
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 12px;
-  color: #6b7280;
-}
-
-.dev-toolbar {
-  display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
-  padding-top: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eceef1;
 }
 
-.dev-toolbar button {
-  align-self: flex-start;
-  padding: 6px 12px;
+.note__status {
+  flex: 1;
+  font-size: 11px;
+  color: #b42318;
+}
+
+.note__button {
+  padding: 2px 9px;
   font: inherit;
-  color: #1f2328;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #3a4046;
   cursor: pointer;
   background-color: #f4f5f7;
   border: 1px solid #d7dade;
   border-radius: 6px;
 }
 
-.dev-toolbar button:hover:not(:disabled) {
+.note__button:hover {
   background-color: #eceef1;
 }
 
-.dev-toolbar button:disabled {
-  cursor: default;
-  opacity: 0.6;
+.note__button--active {
+  color: #ffffff;
+  background-color: #2f6feb;
+  border-color: #2f6feb;
 }
 
-.dev-toolbar__error {
+.note__button--active:hover {
+  background-color: #2a63d2;
+}
+
+.note__editor {
+  flex: 1;
+  padding: 10px 12px;
+  font: inherit;
+  color: inherit;
+  resize: none;
+  border: none;
+  outline: none;
+}
+
+.note__editor::placeholder {
+  color: #a8adb5;
+}
+
+.note__editor:disabled {
+  background-color: #ffffff;
+}
+
+.note__error {
   margin: 0;
+  padding: 12px;
   font-size: 12px;
   color: #b42318;
-}
-
-.path-info {
-  margin: auto 0 0;
-  padding-top: 10px;
-  border-top: 1px solid #eceef1;
-}
-
-.path-info dt {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #8a9099;
-}
-
-.path-info dd {
-  margin: 2px 0 0;
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  color: #3a4046;
 }

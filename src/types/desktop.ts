@@ -1,27 +1,43 @@
 /**
  * Shared desktop-layer types.
  *
- * Phase 0 only distinguishes the main window from temporary test windows so
- * that each webview can render the right view. Phase 1 will replace this with
- * a real note/window identity model.
+ * These mirror the Rust structs in `src-tauri/src/notes.rs`. Rust owns note
+ * identity and persistence; the frontend only reads this shape and renders it.
  */
 
-export const MAIN_WINDOW_LABEL = "main";
+/** Every note window label starts with this prefix. */
+export const NOTE_LABEL_PREFIX = "note-";
 
-export type WindowRole = "main" | "test-note";
-
-export interface CreatedWindow {
-  /** Unique Tauri window label, e.g. `test-note-1`. */
-  label: string;
-  /** Which view this window should render. */
-  role: WindowRole;
+/** Saved window geometry, in physical pixels. Absent fields mean "not known". */
+export interface NoteWindowState {
+  x?: number | null;
+  y?: number | null;
+  width?: number | null;
+  height?: number | null;
+  always_on_top: boolean;
 }
 
-export interface AppPathInfo {
-  /** Absolute path to the OS-specific per-app data directory. */
-  appDataDir: string;
+/** One sticky note as stored by Rust. */
+export interface NoteRecord {
+  /** Stable for the lifetime of the note; also the JSON file stem. */
+  id: string;
+  content: string;
+  /** Unix epoch milliseconds. */
+  created_at: number;
+  /** Unix epoch milliseconds. */
+  updated_at: number;
+  window: NoteWindowState;
 }
 
-export function windowRoleForLabel(label: string): WindowRole {
-  return label === MAIN_WINDOW_LABEL ? "main" : "test-note";
+/**
+ * Extract the note id from a window label, or `null` when the label is not a
+ * note window label.
+ */
+export function noteIdForLabel(label: string): string | null {
+  if (!label.startsWith(NOTE_LABEL_PREFIX)) {
+    return null;
+  }
+
+  const id = label.slice(NOTE_LABEL_PREFIX.length);
+  return id.length > 0 ? id : null;
 }

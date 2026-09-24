@@ -1,12 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppPathInfo, CreatedWindow } from "../types/desktop";
+import type { NoteRecord } from "../types/desktop";
 
 /**
- * Thin wrapper around the Rust desktop commands.
+ * Thin wrapper around the Rust note commands.
  *
- * Window lifecycle, tray behaviour and local paths live in Rust; React only
- * asks for them. Every call converts a rejected IPC promise into a readable
- * Error so UI code can show a message instead of crashing.
+ * Note identity, persistence, window lifecycle, always-on-top and the tray all
+ * live in Rust; React only asks for them. Every call converts a rejected IPC
+ * promise into a readable Error so UI code can report a problem instead of
+ * crashing.
  */
 
 async function callCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -18,14 +19,22 @@ async function callCommand<T>(command: string, args?: Record<string, unknown>): 
   }
 }
 
-/** Ask Rust to create a new isolated test window. */
-export async function createTestWindow(): Promise<CreatedWindow> {
-  const label = await callCommand<string>("create_test_window");
-  return { label, role: "test-note" };
+/** Create a new note and its window. Used by the in-note `+` button. */
+export async function createNote(): Promise<NoteRecord> {
+  return callCommand<NoteRecord>("new_note");
 }
 
-/** Resolve the OS-specific app data directory owned by Rust. */
-export async function getAppPathInfo(): Promise<AppPathInfo> {
-  const appDataDir = await callCommand<string>("app_data_dir");
-  return { appDataDir };
+/** Load one note by its stable id. */
+export async function getNote(id: string): Promise<NoteRecord> {
+  return callCommand<NoteRecord>("get_note", { id });
+}
+
+/** Persist edited text. Rust refreshes `updated_at`. */
+export async function saveNoteContent(id: string, content: string): Promise<void> {
+  return callCommand<void>("save_note_content", { id, content });
+}
+
+/** Turn always-on-top on or off for one note, in the OS and on disk. */
+export async function setNotePinned(id: string, pinned: boolean): Promise<void> {
+  return callCommand<void>("set_note_pinned", { id, pinned });
 }

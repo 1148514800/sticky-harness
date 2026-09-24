@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Base capability applied to every sticky window.",
-  "windows": ["main", "test-note-*"],
+  "description": "Base capability applied to every note window.",
+  "windows": ["note-*"],
   "permissions": ["core:default"]
 }

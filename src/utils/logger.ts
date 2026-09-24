@@ -8,7 +8,3 @@
 export function logError(message: string, error: unknown): void {
   console.error(`[sticky-harness] ${message}`, error);
 }
-
-export function logInfo(message: string, ...details: unknown[]): void {
-  console.info(`[sticky-harness] ${message}`, ...details);
-}

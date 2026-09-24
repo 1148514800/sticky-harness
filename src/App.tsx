@@ -1,29 +1,34 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { MainWindow } from "./windows/MainWindow";
-import { TestNoteWindow } from "./windows/TestNoteWindow";
-import { windowRoleForLabel } from "./types/desktop";
+import { noteIdForLabel } from "./types/desktop";
+import { NoteWindow } from "./windows/NoteWindow";
 
 /**
  * Root component for a single webview.
  *
- * Every Tauri window mounts its own React root, and the view is chosen from
- * that window's own label. Nothing here is global app state, so one window
- * closing can never affect another window's UI.
+ * Every note is its own Tauri window, and each mounts its own React root. The
+ * view is chosen from that window's own label, so there is no shared root
+ * window and closing one note can never affect another.
  */
 function App() {
-  let label = "main";
+  let label = "";
 
   try {
     label = getCurrentWindow().label;
   } catch (cause) {
-    console.error("[sticky-harness] could not read the window label; falling back to main", cause);
+    console.error("[sticky-harness] could not read the window label", cause);
   }
 
-  return windowRoleForLabel(label) === "main" ? (
-    <MainWindow />
-  ) : (
-    <TestNoteWindow label={label} />
-  );
+  const noteId = noteIdForLabel(label);
+
+  if (noteId === null) {
+    return (
+      <p className="note__error">
+        This window is not a note window. Create one from the tray menu.
+      </p>
+    );
+  }
+
+  return <NoteWindow noteId={noteId} />;
 }
 
 export default App;

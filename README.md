@@ -7,12 +7,12 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
-**Phase 0 — Desktop Skeleton (Completed)**
+**Phase 1 — Normal Sticky Notes (Completed)**
 
-Phase 0 deliberately builds only the desktop shell: a window, the ability to
-create more windows at runtime, a system tray, and one place that owns the
-local data directory. Notes, Markdown, todos, saving and harness integration do
-not exist yet.
+The app is now usable as a basic desktop sticky-note tool: every note is its own
+floating window, text saves itself, and window position, size and always-on-top
+come back after a restart. Markdown, todos and harness integration do not exist
+yet.
 
 ## Tech Stack
 
@@ -47,9 +47,9 @@ npm install
 npm run tauri dev
 ```
 
-This starts Vite on port 1420 and launches the desktop app. The app window
-shows the current phase and the resolved App Data path. Use
-**Create Test Window** to open additional windows.
+This starts Vite on port 1420 and launches the desktop app. On first run it
+opens one blank note. Use the `+` button inside a note, or **New Note** in the
+tray menu, to create more.
 
 Other useful scripts:
 
@@ -80,18 +80,17 @@ npm run tauri build -- --bundles msi
 ```text
 sticky-harness/
 ├─ src/                        # React + TypeScript (UI only)
-│  ├─ components/              # Reusable UI pieces
-│  ├─ windows/                 # One view per window role
 │  ├─ services/                # Thin wrappers over Rust commands
 │  ├─ types/                   # Shared frontend types
 │  ├─ utils/                   # Small helpers (logging)
+│  ├─ windows/                 # One view per window role
 │  ├─ App.tsx                  # Root component, picks a view per window
 │  └─ main.tsx                 # React entry point
 ├─ src-tauri/                  # Rust (desktop lifecycle and OS access)
 │  ├─ src/
 │  │  ├─ lib.rs                # App entry: setup, commands, exit handling
+│  │  ├─ notes.rs              # Note identity, persistence and window lifecycle
 │  │  ├─ tray.rs               # System tray icon and its menu
-│  │  ├─ windows.rs            # Window creation and focus/show logic
 │  │  └─ paths.rs              # The one owner of the local data directory
 │  ├─ capabilities/default.json
 │  └─ tauri.conf.json
@@ -104,18 +103,22 @@ sticky-harness/
 The split matters and should stay intact as the app grows:
 
 - **React / TypeScript** owns UI, view state and user interaction.
-- **Rust / Tauri** owns window lifecycle, the tray, OS capabilities, local
-  paths, and (later) local harness communication.
+- **Rust / Tauri** owns window lifecycle, note identity, persistence, the tray,
+  OS capabilities, local paths, and (later) local harness communication.
 
-React never drives desktop lifecycle directly; it asks Rust through commands.
+React never drives desktop lifecycle or touches note files directly; it asks
+Rust through commands.
 
 ## Local Data
 
-All future user data — notes, config, harness settings, window state — will live
-under the OS app data directory resolved by Tauri, currently:
+Every note is one JSON file under the OS app data directory resolved by Tauri,
+currently on Windows:
 
 ```text
-%APPDATA%\com.stickyharness.desktop
+%APPDATA%\com.stickyharness.desktop\
+└─ notes\
+   ├─ <note-id>.json
+   └─ <note-id>.json
 ```
 
 `src-tauri/src/paths.rs` is the only module that decides this location. Never
@@ -123,19 +126,21 @@ hardcode a path or place user data in the project directory.
 
 ## Development Behaviour To Know
 
-- Closing a window does **not** quit the app. The tray stays alive so windows
-  can be reopened.
-- Choosing **Exit** in the tray menu quits the process.
-- Newly created windows are named `test-note-1`, `test-note-2`, and so on.
+- **Closing a note deletes it.** The window `X` button removes both the window
+  and its JSON file, with no confirmation.
+- **Closing every note does not quit the app.** The tray stays alive so you can
+  create a note again from **New Note**.
+- **Choosing Exit in the tray quits the process and keeps every note.** Deleting
+  notes on exit is never intended behaviour.
 
 ## Roadmap
 
-- Phase 1 — Normal sticky notes
+- Phase 1 — Normal sticky notes ✅
 - Phase 2 — Markdown / Todo
 - Phase 3 — Desktop experience
 - Phase 4 — Harness Protocol
 - Phase 5 — Harness Task Note
 - Phase 6 — Harness Adapters
 
-Only Phase 0 is implemented. See `AI_HANDOFF.md` for the detailed current
+Only Phase 1 is implemented. See `AI_HANDOFF.md` for the detailed current
 state and next step.
