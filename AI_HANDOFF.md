@@ -141,8 +141,9 @@ restored on restart. Replace the temporary test-window command and dev toolbar.
 
 ## 10. Latest Commit
 
-Recorded by the commit that introduced this file:
+Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
+`main`).
 
 ```text
-see `git log -1` — "feat: bootstrap desktop sticky note app"
+406e761 feat: bootstrap desktop sticky note app
 ```
