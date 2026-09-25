@@ -99,7 +99,7 @@ on load rather than forking into a second file.
 
 Phase 2 — Markdown / Todo
 
-Status: Completed in the working tree (not committed)
+Status: Completed
 
 Done:
 
@@ -241,8 +241,8 @@ single `create_and_open` window path.
 ## 10. Latest Commit
 
 Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
-`main`). Phase 2 is local work on top of this commit and has not been committed:
+`main`). Created by the commit that produced this state:
 
 ```
-1b43292 docs: record Phase 1 commit in handoff
+2c8c872f7533346b48fcbf095ae7c9d2262f4d05 feat: edit notes as markdown with todos
 ```
