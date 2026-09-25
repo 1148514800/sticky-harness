@@ -366,9 +366,14 @@ Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
 `main`). Local commits only; nothing has been pushed.
 
 ```
+c2ef7e7 feat: improve desktop note experience            (Phase 3)
 8d83a70 fix: complete markdown note runtime behavior   (Phase 2 closeout)
+c1c1f85 docs: record Phase 2 commit in handoff
+2c8c872 feat: edit notes as markdown with todos        (Phase 2)
+1b43292 docs: record Phase 1 commit in handoff
 ```
 
-Phase 3 is committed on top of this as
-`feat: improve desktop note experience`; read `git log -5 --oneline` for the
-authoritative order and hashes rather than trusting the copy above.
+Every commit is local. Nothing has been pushed, and the Phase 3 work adds:
+the tray menu with Show All Notes / Hide All Notes, the official autostart
+plugin behind Start with Windows, the 220x160 minimum size, and the light note
+styling pass.
