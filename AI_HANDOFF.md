@@ -49,6 +49,12 @@ is local: no account, no sync, no server.
   Exit item calls `notes::begin_exit` and then `app.exit(0)`. While the
   `exiting` flag is set, `CloseRequested` returns early instead of deleting,
   so shutdown can never be mistaken for a user delete.
+- **Visibility is not lifetime**: `notes::hide_all_notes` only calls
+  `window.hide()` and `notes::show_all_notes` only calls `window.show()` plus
+  `set_focus()`. Neither creates a window, touches a file, or changes
+  geometry, content or Pin, so hidden is a session-only state that vanishes on
+  restart. Hiding is never undone implicitly: a note created while others are
+  hidden appears on its own and leaves the rest hidden.
 
 ### Persistence format
 
@@ -100,33 +106,46 @@ on load rather than forking into a second file.
 - Window-creating commands are `async` on purpose: window creation happens
   on the event loop delivering the invoke, so a synchronous command
   deadlocks.
+- The minimum inner size is 220x160; `MIN_WIDTH`/`MIN_HEIGHT` in `notes.rs` are
+  the only place it is set. Below that the toolbar and the note body stop
+  fitting together.
 
 ## 4. Current Phase
 
-Phase 2 — Markdown / Todo
+Phase 3 — Desktop Experience
 
 Status: Completed
 
 Done:
 
 - Phase 1 sticky notes, still one JSON file and one window per note.
-- Note text is Markdown. The window edits it directly; there is no preview
-  mode and no formatting toolbar.
-- Headings, emphasis, lists, quotes, code and links round-trip through the
-  same `content` string.
-- `- [ ] ` / `- [x] ` become checkboxes. Clicking a checkbox rewrites the Markdown.
-- Phase 1 plain text loads as paragraphs, with no migration.
-- Ctrl+click opens an http, https or mailto link in the default app. A plain
-  click only moves the caret, and the webview never navigates.
-- Tray Exit asks every open note to flush, waits up to 1.5s, then quits. A
-  save already in flight does not count as that flush.
-- Closing a note still deletes it. A trailing content, geometry or pin write
-  cannot recreate the file.
+- Phase 2 Markdown editing with todos, links and a WYSIWYG window.
+- The tray menu is the whole desktop surface:
+  `New Note / Show All Notes / Hide All Notes / Start with Windows / Exit`,
+  separated into their groups.
+- **Hide All Notes / Show All Notes** hide and reveal existing note windows.
+  Hiding is session-only: no window is created or destroyed, no file is read or
+  written, and content, geometry and Pin are untouched. New Note while notes
+  are hidden leaves the hidden ones hidden.
+- **Start with Windows** is a checkable tray item backed entirely by the
+  official `tauri-plugin-autostart`. The tick is read from the real OS state on
+  startup, and a failed change is written back from the OS value rather than
+  trusting the click. There is no registry edit, no startup-folder shortcut and
+  no self-managed autostart flag of our own.
+- **Tray Exit flushes hidden notes too.** The flush handshake runs for every
+  open window, hidden or not, so text typed moments before Hide All survives.
+- The minimum window size is 220x160 (was 240x160). At that size the toolbar is
+  29 px tall, leaving 131 px of the 160 for the note, and typing, `+`, Pin, todo
+  checkboxes, vertical scrolling and horizontal code scrolling all work.
+- Light UI polish only: a more compact toolbar, lighter borders, natural hover
+  and active states, a filled (not tinted) Pin state, a trimmed placeholder and
+  "Not saved" shown only when a save actually failed.
 
 Not done (intentionally, do not start without a new task):
 
-- Images, search, themes, settings window, global shortcuts, SQLite,
-  harness protocol, harness adapters.
+- Images, search, themes, settings window, global shortcuts, custom colors or
+  opacity, frameless windows, a Markdown toolbar, SQLite, harness protocol,
+  harness adapters.
 
 ## 5. Important Files
 
@@ -144,7 +163,7 @@ src/styles.css                        Minimal note styling
 
 src-tauri/src/lib.rs                  Setup, command registration, exit veto
 src-tauri/src/notes.rs                Note identity, persistence, window lifecycle
-src-tauri/src/tray.rs                 Tray icon and New Note/Exit menu
+src-tauri/src/tray.rs                 Tray icon, menu, autostart checkbox
 src-tauri/src/paths.rs                Sole owner of the local data directory
 src-tauri/capabilities/default.json   Core permissions for note-* windows
 src-tauri/tauri.conf.json             No startup window; notes created by Rust
@@ -169,7 +188,18 @@ src-tauri/tauri.conf.json             No startup window; notes created by Rust
 - Closing a note window deletes that note and leaves the others untouched.
 - Deleting every note leaves the process and tray running; New Note brings the
   app back.
-- Tray Exit quits the process and keeps every note file.
+- Hide All Notes hides every note window and keeps them: nothing is deleted and
+  nothing is written, so Show All Notes returns the same notes on the same
+  screen. A restart shows them again, because hidden is not persisted.
+- New Note while notes are hidden opens the new note and leaves the others
+  hidden.
+- Start with Windows in the tray ticks and unticks the real Windows Run entry
+  through the official autostart plugin, and starts ticked if the entry is
+  already there.
+- A note can be resized down to 220x160; the toolbar stays usable and the note
+  body keeps most of the height.
+- Tray Exit quits the process and keeps every note file, including notes that
+  were hidden.
 - A corrupt or hand-edited note file is logged and skipped without stopping the
   other notes from loading.
 
@@ -184,6 +214,16 @@ npm run build             PASS  (only the pre-existing chunk-size warning)
 cargo check --all-targets PASS  (no warnings)
 cargo build               PASS
 cargo build --release     PASS
+```
+
+Re-run for Phase 3, after the tray, autostart, minimum size and CSS changes:
+
+```
+npm test                  PASS  67 tests (3 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
 ```
 
 Behaviour confirmed against a running build, driven through the WebView2 CDP
@@ -231,13 +271,50 @@ Phase 1 checklist, re-run on the current Markdown editor:
 Off-screen recovery PASS  a note saved at (9000,9000) was pulled back on screen
 ```
 
+Phase 3 (Desktop Experience), every scenario run against a live build:
+
+```
+Tray menu            PASS  8 items: New Note, Show All Notes, Hide All Notes,
+                           Start with Windows, Exit and three separators
+A  3 notes -> Hide All PASS 3 windows hidden, 0 visible, process alive,
+                           3 JSON files untouched
+B  Hide All -> Show All PASS 3 windows visible again; content, geometry
+                           (60,60 / 92,92 / 124,124 at 330x300) and Pin
+                           unchanged byte for byte
+C  Hide All -> New Note PASS new note visible itself, the other notes stayed
+                           hidden; Show All was not triggered
+D  Autostart OFF -> ON PASS real HKCU Run value =
+                           F:\study\note_app\src-tauri\target\debug\
+                           sticky-harness.exe ; log
+                           `autostart requested=true actual=true`
+   Autostart ON -> OFF PASS key gone again; log
+                           `autostart requested=false actual=false`;
+                           left OFF afterwards, as required
+E  fast typing -> Hide PASS typed SCENARIO_E_TOKEN_9876, Hide All, Tray Exit
+   -> Exit -> restart       328 ms later; disk + UI = SCENARIO_E_TOKEN_9876
+F  X delete -> Show All PASS deleted note gone from disk and stayed gone
+                           across Hide All + Show All; 3 notes left, no
+                           resurrection
+G  delete all -> tray   PASS 0 notes and 0 JSON files, process and tray alive,
+   -> New Note             menu intact, New Note created 1a0d887e9b0-0
+Hidden exit flush      PASS  FINAL_HIDDEN_TOKEN typed, Hide All, Tray Exit:
+                           369 ms; disk + UI = FINAL_HIDDEN_TOKEN
+220x160                PASS  forced to the floor: inner size 220x160, typing
+                           works, `+` and Pin are clickable, a real todo
+                           checkbox click flips it to checked, the editor
+                           scrolls vertically, and the toolbar is 29 px tall
+                           (131 px of 160 left for the note)
+```
+
 ## 8. Known Issues
 
-- **A destroyed window used to outlive its note.** Before
-  `core:window:allow-destroy` was granted, closing a note removed its JSON but
-  left the window on screen, so the note looked open while its file was gone.
-  Fixed in the Phase 2 follow-up; the X button now removes window and file
-  together.
+- **Capabilities the frontend needs must be granted explicitly.**
+  `core:window:allow-destroy` is what lets a closing note window actually
+  finish closing; without it the X button deleted the JSON and left the window
+  on screen. `core:window:allow-set-size` is granted for the same reason, so
+  the note can be resized to its documented 220x160 floor. `core:window:default`
+  contains neither, which is worth remembering before adding the next window
+  API call.
 - **An `os error 32` read race was observed once during runtime verification,**
   but repeated `create -> immediate get_note` checks could not reproduce it.
   Fifteen serial runs (6 + 10) of create-then-read all succeeded. Persistence
@@ -267,18 +344,31 @@ Off-screen recovery PASS  a note saved at (9000,9000) was pulled back on screen
 
 ## 9. Next Step
 
-Next: Phase 3 — Desktop experience
+Next: Phase 4 — Harness Protocol
 
 Direction only, do not start without a new task. The roadmap name is the whole
-spec so far: do not invent themes, settings, search or shortcuts until a task
-spells them out. Keep `notes.rs` the only owner of persistence and keep the
-single `create_and_open` window path.
+spec so far: do not invent themes, settings, search or shortcuts, and do not
+implement the harness here. Phase 4 is about agreeing how a local AI harness
+reports what it is running to this app - the message shape and the boundary
+between push (a harness reports in) and pull (the app reads harness state).
+
+Constraints that already hold and must survive Phase 4:
+
+- `notes.rs` stays the only owner of note persistence, and `create_and_open`
+  stays the only way a note window comes into being.
+- The Harness Task Note is a separate concept from a normal sticky note. It is
+  not a note file, and it must not go through the note JSON format.
+- Everything stays local: no account, no sync, no server.
 
 ## 10. Latest Commit
 
 Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
-`main`). Created by the commit that produced this state:
+`main`). Local commits only; nothing has been pushed.
 
 ```
-2c8c872f7533346b48fcbf095ae7c9d2262f4d05 feat: edit notes as markdown with todos
+8d83a70 fix: complete markdown note runtime behavior   (Phase 2 closeout)
 ```
+
+Phase 3 is committed on top of this as
+`feat: improve desktop note experience`; read `git log -5 --oneline` for the
+authoritative order and hashes rather than trusting the copy above.

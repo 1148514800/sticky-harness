@@ -28,7 +28,7 @@ pub const EVENT_EXIT_REQUESTED: &str = "sticky-harness://exit-requested";
 
 const WINDOW_TITLE: &str = "便签";
 /// Minimum window size in logical pixels, so it stays usable at any DPI.
-const MIN_WIDTH: f64 = 240.0;
+const MIN_WIDTH: f64 = 220.0;
 const MIN_HEIGHT: f64 = 160.0;
 const DEFAULT_WIDTH: u32 = 330;
 const DEFAULT_HEIGHT: u32 = 300;
@@ -733,4 +733,72 @@ pub async fn set_note_pinned(app: AppHandle, id: String, pinned: bool) -> Result
         record.updated_at = now_millis();
         true
     })
+}
+
+/// Every note window that is currently open, by label.
+fn open_note_windows(app: &AppHandle) -> Vec<WebviewWindow> {
+    app.webview_windows()
+        .into_iter()
+        .filter(|(label, _)| label.starts_with(NOTE_LABEL_PREFIX))
+        .map(|(_, window)| window)
+        .collect()
+}
+
+/// Show every note window again after `hide_all_notes`.
+///
+/// This only changes visibility: no note is created, no file is read or
+/// written, and no geometry, content or pin is touched. Bringing the windows
+/// forward is enough for the user to find them again.
+pub fn show_all_notes(app: &AppHandle) -> Result<usize, String> {
+    let mut shown = 0;
+    for window in open_note_windows(app) {
+        if let Err(error) = window.show() {
+            eprintln!("[sticky-harness] could not show a note window: {error}");
+            continue;
+        }
+        shown += 1;
+    }
+
+    // Focus one note so the click has a visible result even if the notes were
+    // already on screen.
+    if let Some(window) = app
+        .webview_windows()
+        .into_iter()
+        .find(|(label, _)| label.starts_with(NOTE_LABEL_PREFIX))
+        .map(|(_, window)| window)
+    {
+        let _ = window.set_focus();
+    }
+
+    Ok(shown)
+}
+
+/// Hide every note window without closing it.
+///
+/// Hiding is deliberately session-only: nothing is written to disk, no note is
+/// deleted, and the windows keep their React state, so a later Show All returns
+/// exactly what was on screen. The tray stays alive, which is the whole point.
+pub fn hide_all_notes(app: &AppHandle) -> Result<usize, String> {
+    let mut hidden = 0;
+    for window in open_note_windows(app) {
+        if let Err(error) = window.hide() {
+            eprintln!("[sticky-harness] could not hide a note window: {error}");
+            continue;
+        }
+        hidden += 1;
+    }
+
+    Ok(hidden)
+}
+
+/// Tray-facing wrapper: show every existing note (no window is created).
+#[tauri::command]
+pub async fn show_notes(app: AppHandle) -> Result<usize, String> {
+    show_all_notes(&app)
+}
+
+/// Tray-facing wrapper: hide every note without closing or deleting it.
+#[tauri::command]
+pub async fn hide_notes(app: AppHandle) -> Result<usize, String> {
+    hide_all_notes(&app)
 }

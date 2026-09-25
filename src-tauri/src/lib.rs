@@ -11,6 +11,12 @@ use tauri::RunEvent;
 pub fn run() {
     let app = match tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // OS launch-at-startup is owned entirely by the official plugin:
+        // no registry edits and no startup-folder shortcuts of our own.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(notes::NoteRuntime::default())
         .invoke_handler(tauri::generate_handler![
             notes::new_note,
@@ -19,6 +25,8 @@ pub fn run() {
             notes::set_note_pinned,
             notes::confirm_exit_flush,
             notes::exit_app,
+            notes::show_notes,
+            notes::hide_notes,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

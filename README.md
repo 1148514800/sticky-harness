@@ -7,12 +7,27 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
-**Phase 2 — Markdown / Todo (Completed)**
+**Phase 3 — Desktop Experience (Completed)**
 
-Notes are edited as Markdown in the window itself: headings, emphasis, lists,
-code, quotes, links and checkboxes. The file on disk is still one JSON note,
-and `content` is the Markdown string. Ctrl+click opens a web or mail link.
-Images, themes and harness integration are not in yet.
+Notes are still edited as Markdown in the window itself: headings, emphasis,
+lists, code, quotes, links and checkboxes. The file on disk is still one JSON
+note, and `content` is the Markdown string. Ctrl+click opens a web or mail link.
+
+The tray is the app's desktop surface:
+
+| Tray item | What it does |
+| --- | --- |
+| New Note | Creates and opens another note |
+| Show All Notes | Reveals every note window that is hidden |
+| Hide All Notes | Hides every note window without closing it |
+| Start with Windows | Ticks or unticks starting the app when you sign in |
+| Exit | Quits the app and keeps every note |
+
+Hiding is session-only: hidden notes are not deleted, not saved and not
+remembered across a restart. **Start with Windows** is the real Windows
+autostart entry, managed by the official Tauri autostart plugin and ticked from
+the actual OS state. A note can be resized down to 220x160. Images, themes,
+search, a settings window and harness integration are not in yet.
 
 ## Tech Stack
 
@@ -22,6 +37,12 @@ Images, themes and harness integration are not in yet.
 | UI | React 19 + TypeScript |
 | Bundler | Vite 8 |
 | Package manager | npm |
+
+Rust plugins in use: `tauri-plugin-opener` (open links in the default app) and
+`tauri-plugin-autostart` (the official launch-at-startup implementation behind
+the tray's **Start with Windows** item). Both are declared in
+`src-tauri/Cargo.toml`; there is no hand-written registry or startup-folder
+code of our own.
 
 ## Requirements
 
@@ -90,7 +111,7 @@ sticky-harness/
 │  ├─ src/
 │  │  ├─ lib.rs                # App entry: setup, commands, exit handling
 │  │  ├─ notes.rs              # Note identity, persistence and window lifecycle
-│  │  ├─ tray.rs               # System tray icon and its menu
+│  │  ├─ tray.rs               # Tray icon, its menu and the autostart checkbox
 │  │  └─ paths.rs              # The one owner of the local data directory
 │  ├─ capabilities/default.json
 │  └─ tauri.conf.json
@@ -135,15 +156,31 @@ hardcode a path or place user data in the project directory.
   keystrokes can be saved.
 - **Ctrl+click opens a link.** A normal click edits it. Only http, https and
   mailto links open.
+- **Hide All Notes hides; it never deletes.** Every note window disappears, but
+  its file, text, size and Pin are untouched, so Show All Notes brings them back
+  exactly as they were. Hidden is a session state: restarting the app shows the
+  notes again.
+- **New Note does not reveal hidden notes.** Hiding is only undone by Show All
+  Notes, so a note you hid stays hidden even while you create a new one.
+- **Start with Windows is the real thing.** It writes the same Windows
+  autostart entry the OS itself uses, through the official Tauri plugin; the
+  tick is read back from the OS, so it is still correct if the entry was changed
+  outside the app. There is no registry editing and no startup-folder shortcut
+  of our own.
+- **A note can be as small as 220x160.** At that size the `+` and Pin buttons,
+  todo checkboxes and scrolling all still work; the toolbar takes 29 px and the
+  note keeps the rest.
+- **Exit saves hidden notes too.** Quitting flushes every open note, whether or
+  not it is currently hidden.
 
 ## Roadmap
 
 - Phase 1 — Normal sticky notes ✅
 - Phase 2 — Markdown / Todo ✅
-- Phase 3 — Desktop experience
+- Phase 3 — Desktop experience ✅
 - Phase 4 — Harness Protocol
 - Phase 5 — Harness Task Note
 - Phase 6 — Harness Adapters
 
-Phases 1 and 2 are implemented. See `AI_HANDOFF.md` for the detailed current
-state and next step.
+Phases 1 to 3 are implemented, and nothing is pushed anywhere. See
+`AI_HANDOFF.md` for the detailed current state and the next step.
