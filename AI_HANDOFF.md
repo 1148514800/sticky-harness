@@ -78,6 +78,12 @@ on load rather than forking into a second file.
 - `content` is Markdown source. The editor turns it into a rich document
   only in memory; Rust stores the string and does not interpret it. Phase 1
   plain text is valid Markdown, so old notes open as paragraphs.
+- A note window needs `core:window:allow-destroy` in its capability. The
+  frontend `onCloseRequested` listener closes the window for real by calling
+  `destroy()` once its handler returns, so without that permission the X
+  button deleted the note's JSON while the window itself stayed open, leaving
+  a window whose file was already gone. Deletion is driven by Rust's
+  `CloseRequested` handler; the permission only lets the window finish closing.
 - A file that cannot be parsed is logged and skipped; the other notes still
   load. A saved position with no real overlap with any current monitor is
   replaced by a cascaded position on the primary monitor.
@@ -172,41 +178,71 @@ src-tauri/tauri.conf.json             No startup window; notes created by Rust
 Run on Windows (Node 24.11.0, Rust 1.91.1, MSVC at F:\software\VisualStudio):
 
 ```
+npm test                  PASS  67 tests (markdown, todos, link rules)
 npm run typecheck         PASS
-npm run build             PASS
-cargo check --all-targets PASS (no warnings)
+npm run build             PASS  (only the pre-existing chunk-size warning)
+cargo check --all-targets PASS  (no warnings)
 cargo build               PASS
 cargo build --release     PASS
 ```
 
 Behaviour confirmed against a running build, driven through the WebView2 CDP
-endpoint and real Win32 window messages:
+endpoint and real Win32 window messages. The Markdown editor checklist below
+was re-run after the textarea was replaced, and the Phase 2 items were added:
 
 ```
-1 New notes        PASS  4 notes created; ids and labels unique
-2 Content restore  PASS  "Note A/B/C" all returned after a restart
-3 Window restore   PASS  position + size restored exactly (physical px)
+Phase 2 (Markdown / Todo)
+Todo cold start        PASS  `- [ ] Task`, `- [x] Task` become real task items
+Todo persistence       PASS  clicking a checkbox round-trips through Markdown
+Underscore round-trip  PASS  FINAL_TOKEN_123456 is stored unescaped
+Quick Exit x3          PASS  typed text survived all three Tray Exit runs
+  round 1              input->exit <300 ms; process gone in 378 ms
+  round 2              input->exit <300 ms; process gone in 357 ms
+  round 3              input->exit <300 ms; process gone in 384 ms
+  each run             disk + UI = FINAL_TOKEN_123456
+In-flight save + exit  PASS  OLD_STATE_ then FINAL_STATE_123456 within the
+                             debounce window saved in full; process gone in
+                             383 ms; disk + UI = OLD_STATE_FINAL_STATE_123456
+Close = Delete race A  PASS  X inside the 300 ms debounce: window gone, JSON
+                             gone, still absent after 3 s, not restored
+Close = Delete race B  PASS  content + move + resize + Pin all pending at the
+                             moment of X: JSON never reappeared, not restored
+os error 32            PASS  10/10 serial create -> immediate get_note reads
+                             succeeded; the single earlier occurrence did not
+                             reproduce (see Known Issues)
+Phase 1 regression     PASS  see the Phase 1 checklist below
+```
+
+Phase 1 checklist, re-run on the current Markdown editor:
+
+```
+1 New notes        PASS  created from the in-note `+` button and from tray
+                         New Note; ids and labels unique
+2 Content restore  PASS  every note's Markdown returned after a restart
+3 Window restore   PASS  moved/resized notes returned at the same position and
+                         size (physical px)
 4 Pin persist      PASS  only the pinned note came back pinned
 5 Delete           PASS  window gone, its JSON gone, others untouched
 6 Close all notes  PASS  all JSON removed; process + tray still alive;
                          tray New Note recreated a note
-7 Tray Exit        PASS  process exited; both note JSON files survived and
-                         both notes restored on the next start
+7 Tray Exit        PASS  process exited; every note JSON survived and all
+                         notes restored on the next start
 8 Corrupt JSON     PASS  bad file logged + skipped; the other notes loaded
 Off-screen recovery PASS  a note saved at (9000,9000) was pulled back on screen
 ```
 
-That checklist is the Phase 1 run. It has not been repeated since the textarea
-was replaced. Phase 2 was checked on the working tree with:
-
-```
-npm test                  PASS  59 tests (markdown, todos, link rules)
-npm run typecheck         PASS
-cargo check --all-targets PASS (no warnings)
-```
-
 ## 8. Known Issues
 
+- **A destroyed window used to outlive its note.** Before
+  `core:window:allow-destroy` was granted, closing a note removed its JSON but
+  left the window on screen, so the note looked open while its file was gone.
+  Fixed in the Phase 2 follow-up; the X button now removes window and file
+  together.
+- **An `os error 32` read race was observed once during runtime verification,**
+  but repeated `create -> immediate get_note` checks could not reproduce it.
+  Fifteen serial runs (6 + 10) of create-then-read all succeeded. Persistence
+  was deliberately left unchanged rather than restructured around a race that
+  no longer reproduces.
 - **`fs::rename` can be refused on this machine.** Inside the AppData tree the
   rename returns `ERROR_NOT_SAME_DEVICE` (`os error 17`) even though both files
   are in the same directory, so `write_record` falls back to copying over the

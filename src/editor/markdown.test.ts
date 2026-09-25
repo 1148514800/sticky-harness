@@ -61,6 +61,43 @@ describe("markdown round trip", () => {
   });
 });
 
+describe("plain text stays plain", () => {
+  /**
+   * A note is stored as Markdown source, so text typed without any syntax must
+   * be written back exactly as typed. Stray escapes would still render, but
+   * they would stop the JSON file from matching what the user typed.
+   */
+  it.each([
+    "FINAL_TOKEN_123456",
+    "snake_case_here",
+    "a_b_c",
+    "100%",
+    "plain sentence with punctuation: yes!",
+  ])("keeps %s free of unnecessary escapes", (markdown) => {
+    expect(roundTrip(markdown)).toBe(markdown);
+  });
+
+  it("still escapes an underscore that really opens emphasis", () => {
+    // A leading underscore could be read as emphasis, so that one stays
+    // escaped and the document still round-trips.
+    expect(roundTrip("\\_leading underscore")).toBe("\\_leading underscore");
+  });
+
+  it("keeps the double underscore of a word stable across saves", () => {
+    // The first pass drops the redundant escape and keeps the second, which is
+    // the one that stops the pair from reading as bold. Saving again must not
+    // keep eating escapes, so the second pass is the fixed point.
+    const once = roundTrip("a__b");
+    expect(once).toBe("a_\\_b");
+    expect(roundTrip(once)).toBe(once);
+  });
+
+  it("leaves emphasis intact", () => {
+    expect(roundTrip("plain _em_ text")).toBe("plain *em* text");
+    expect(roundTrip("__strong__ text")).toBe("**strong** text");
+  });
+});
+
 describe("markdown parsing shape", () => {
   it("maps Phase 1 plain text onto paragraphs, not a code block", () => {
     const types = nodeTypes(markdownToDoc("hello world"));

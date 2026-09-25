@@ -72,9 +72,33 @@ export function markdownToDoc(markdown: string): Record<string, unknown> {
   return markdownManager().parse(markdown) as unknown as Record<string, unknown>;
 }
 
+/**
+ * Markdown only treats an underscore as emphasis when it opens at a word
+ * boundary, so a literal one inside a word - `FINAL_TOKEN_123456`,
+ * `snake_case` - is ordinary text and needs no escaping.
+ *
+ * Tiptap's serialiser escapes every underscore unconditionally, which writes
+ * `FINAL\_TOKEN\_123456` to disk for text the user typed plainly. That is
+ * valid Markdown and still renders correctly, but the stored source stops
+ * matching what was typed, which is the format this app promises and what a
+ * text editor or git diff sees. Only escape the underscores that could really
+ * open emphasis: at a word start, or doubled as `__`.
+ */
+function unescapeLiteralUnderscores(markdown: string): string {
+  return markdown.replace(/\\_/g, (escape, offset: number) => {
+    const before = offset === 0 ? "" : markdown[offset - 1];
+    const after = markdown[offset + 2] ?? "";
+    const opensWord = !/[A-Za-z0-9]/.test(before);
+    if (!opensWord && after !== "_") {
+      return "_";
+    }
+    return escape;
+  });
+}
+
 /** Serialise an editor document back into the Markdown that gets persisted. */
 export function docToMarkdown(doc: unknown): string {
-  return markdownManager().serialize(doc as never);
+  return unescapeLiteralUnderscores(markdownManager().serialize(doc as never));
 }
 
 let cached: MarkdownManager | null = null;

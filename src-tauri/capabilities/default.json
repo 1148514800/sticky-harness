@@ -2,6 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Base capability applied to every note window.",
-  "windows": ["note-*"],
-  "permissions": ["core:default", "opener:default"]
+  "windows": [
+    "note-*"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-destroy",
+    "opener:default"
+  ]
 }
