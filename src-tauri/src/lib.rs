@@ -1,8 +1,9 @@
+mod harness;
 mod notes;
 mod paths;
 mod tray;
 
-use tauri::RunEvent;
+use tauri::{Manager, RunEvent};
 
 /// Start the desktop app.
 ///
@@ -27,9 +28,18 @@ pub fn run() {
             notes::exit_app,
             notes::show_notes,
             notes::hide_notes,
+            harness::list_active_harness_tasks,
+            harness::list_harness_snapshots,
+            harness::harness_api_port,
+            harness::harness_is_stale,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // The harness registry and its local push endpoint. This starts the
+            // registry even when the port is taken, because the app must keep
+            // working; the failure is logged, not fatal.
+            app.manage(harness::init());
 
             // Resolving the app data dir here gives an early, loggable
             // confirmation of where user notes live.

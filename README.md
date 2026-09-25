@@ -7,6 +7,14 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 4 — Harness Protocol (Completed)**
+
+There is a small local protocol for reporting what an AI harness is running.
+It is vendor-neutral: it knows nothing about Codex, DeepSeek or any other
+harness, so an adapter for a real one goes in front of the protocol later
+rather than inside it. Only the protocol and its in-memory state exist so far;
+the note that displays it is Phase 5.
+
 **Phase 3 — Desktop Experience (Completed)**
 
 Notes are still edited as Markdown in the window itself: headings, emphasis,
@@ -43,6 +51,10 @@ Rust plugins in use: `tauri-plugin-opener` (open links in the default app) and
 the tray's **Start with Windows** item). Both are declared in
 `src-tauri/Cargo.toml`; there is no hand-written registry or startup-folder
 code of our own.
+
+The harness push endpoint adds no dependency: it is a small hand-written
+`std::net` server, because three routes and a bounded body do not justify a web
+framework.
 
 ## Requirements
 
@@ -112,6 +124,11 @@ sticky-harness/
 │  │  ├─ lib.rs                # App entry: setup, commands, exit handling
 │  │  ├─ notes.rs              # Note identity, persistence and window lifecycle
 │  │  ├─ tray.rs               # Tray icon, its menu and the autostart checkbox
+│  │  ├─ harness/              # Harness protocol, registry, push endpoint
+│  │  │  ├─ protocol.rs        # The model, status enum and validation
+│  │  │  ├─ registry.rs        # In-memory state and active-task filtering
+│  │  │  ├─ server.rs          # Loopback-only push endpoint
+│  │  │  └─ adapter.rs         # Pull seam for a future harness adapter
 │  │  └─ paths.rs              # The one owner of the local data directory
 │  ├─ capabilities/default.json
 │  └─ tauri.conf.json
@@ -172,15 +189,67 @@ hardcode a path or place user data in the project directory.
   note keeps the rest.
 - **Exit saves hidden notes too.** Quitting flushes every open note, whether or
   not it is currently hidden.
+- **Harness state is runtime-only.** A harness that reports in is remembered
+  until the app exits and is not written to disk, so a restart starts with an
+  empty registry. See **Harness Protocol** above.
+
+## Harness Protocol
+
+A local AI harness can tell this app what it is running by POSTing to a
+loopback-only endpoint. This is the foundation for the Harness Task Note
+(Phase 5); no harness is integrated yet, and nothing is displayed in the UI.
+
+The server binds `127.0.0.1:17899` only — never `0.0.0.0` — so nothing on your
+network can reach it. State lives in memory and is gone when the app exits.
+
+| Endpoint | What it does |
+| --- | --- |
+| `GET /health` | Liveness, plus the harness and active-task counts |
+| `POST /api/harness/snapshot` | Submit this harness's current state |
+| `GET /api/harness/snapshots` | Read back the latest snapshot per harness |
+
+A snapshot describes tasks, not transcripts. Statuses are `running`, `waiting`,
+`failed`, `completed`, `cancelled` and `unknown`; the first two count as active.
+Times are Unix milliseconds, so a UI computes elapsed time itself.
+
+```json
+{
+  "harness_id": "mybot",
+  "harness_name": "MyBot",
+  "updated_at": 1790340000000,
+  "tasks": [
+    {
+      "task_id": "task-123",
+      "title": "Run tests",
+      "status": "running",
+      "started_at": 1790340000000,
+      "updated_at": 1790340000000
+    }
+  ]
+}
+```
+
+Try it while the app is running (PowerShell):
+
+```powershell
+$body = '{"harness_id":"demo","harness_name":"Demo","tasks":[{"task_id":"t1","title":"Run tests","status":"running","started_at":1790340000000,"updated_at":1790340000000}]}'
+Invoke-RestMethod http://127.0.0.1:17899/api/harness/snapshot -Method Post -ContentType application/json -Body $body
+Invoke-RestMethod http://127.0.0.1:17899/api/harness/snapshots
+```
+
+Posting the same `harness_id` again replaces that harness's snapshot rather than
+adding another. Invalid payloads are rejected with a `4xx` and a readable reason
+and never reach the stored state. If the port is already in use, the app logs it
+and keeps working; notes and the tray are unaffected.
 
 ## Roadmap
 
 - Phase 1 — Normal sticky notes ✅
 - Phase 2 — Markdown / Todo ✅
 - Phase 3 — Desktop experience ✅
-- Phase 4 — Harness Protocol
+- Phase 4 — Harness Protocol ✅
 - Phase 5 — Harness Task Note
 - Phase 6 — Harness Adapters
 
-Phases 1 to 3 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 4 are implemented, and nothing is pushed anywhere. See
 `AI_HANDOFF.md` for the detailed current state and the next step.
