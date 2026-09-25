@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { NoteRecord } from "../types/desktop";
 
 /**
@@ -9,6 +10,13 @@ import type { NoteRecord } from "../types/desktop";
  * promise into a readable Error so UI code can report a problem instead of
  * crashing.
  */
+
+/**
+ * Emitted by Rust when the tray asked to quit. Every note window answers by
+ * saving its last edit and confirming, which is what lets a quit wait for the
+ * final keystrokes instead of dropping them.
+ */
+export const EXIT_REQUESTED_EVENT = "sticky-harness://exit-requested";
 
 async function callCommand<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   try {
@@ -34,7 +42,27 @@ export async function saveNoteContent(id: string, content: string): Promise<void
   return callCommand<void>("save_note_content", { id, content });
 }
 
+/** Tell Rust this note finished its final save while the app is quitting. */
+export async function confirmExitFlush(id: string): Promise<void> {
+  return callCommand<void>("confirm_exit_flush", { id });
+}
+
 /** Turn always-on-top on or off for one note, in the OS and on disk. */
 export async function setNotePinned(id: string, pinned: boolean): Promise<void> {
   return callCommand<void>("set_note_pinned", { id, pinned });
+}
+
+/**
+ * Open a web or mail link in the default app.
+ *
+ * The note window never navigates. Callers must already have refused schemes
+ * other than http, https and mailto.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  try {
+    await openUrl(url);
+  } catch (error) {
+    const reason = typeof error === "string" ? error : String(error);
+    throw new Error(`open_url failed: ${reason}`);
+  }
 }

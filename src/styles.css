@@ -29,6 +29,7 @@ body {
   background-color: #ffffff;
 }
 
+/* Top bar stays deliberately sparse: only `+` and `Pin`. */
 .note__bar {
   display: flex;
   align-items: center;
@@ -69,22 +70,163 @@ body {
   background-color: #2a63d2;
 }
 
-.note__editor {
+/* The editor fills the rest of the window and reads as note paper, not a form. */
+.note__editor-host {
+  display: flex;
   flex: 1;
-  padding: 10px 12px;
-  font: inherit;
-  color: inherit;
-  resize: none;
-  border: none;
+  min-height: 0;
+}
+
+.note__content {
+  flex: 1;
+  min-height: 100%;
+  padding: 8px 12px 12px;
+  overflow-y: auto;
   outline: none;
+  overflow-wrap: anywhere;
 }
 
-.note__editor::placeholder {
+.note__content p {
+  margin: 0 0 6px;
+}
+
+.note__content p:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings stay compact: this is a small floating note, not a document. */
+.note__content h1,
+.note__content h2,
+.note__content h3 {
+  margin: 10px 0 4px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.note__content h1 {
+  font-size: 17px;
+}
+
+.note__content h2 {
+  font-size: 15.5px;
+}
+
+.note__content h3 {
+  font-size: 14.5px;
+  color: #3a4046;
+}
+
+.note__content :first-child {
+  margin-top: 0;
+}
+
+.note__content strong {
+  font-weight: 600;
+}
+
+/* A link is still text: a plain click edits it, Ctrl+click opens it. */
+.note__content a {
+  color: #2f6feb;
+  text-decoration: underline;
+  text-decoration-color: #b9cdfb;
+  cursor: text;
+}
+
+.note__content code {
+  padding: 1px 4px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.9em;
+  background-color: #f4f5f7;
+  border-radius: 4px;
+}
+
+.note__content pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.45;
+  background-color: #f6f7f9;
+  border-radius: 6px;
+}
+
+.note__content pre code {
+  padding: 0;
+  font-size: inherit;
+  background-color: transparent;
+}
+
+.note__content blockquote {
+  margin: 6px 0;
+  padding: 0 0 0 10px;
+  color: #4a5057;
+  border-left: 3px solid #dfe2e7;
+}
+
+.note__content ul,
+.note__content ol {
+  margin: 4px 0;
+  padding-left: 22px;
+}
+
+.note__content li p {
+  margin: 0;
+}
+
+/* Todo lists: a real clickable checkbox plus the task text. */
+.note__content ul[data-type="taskList"] {
+  padding-left: 2px;
+  list-style: none;
+}
+
+.note__content ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.note__content ul[data-type="taskList"] li > label {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-top: 3px;
+}
+
+.note__content ul[data-type="taskList"] li > label input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #2f6feb;
+}
+
+.note__content ul[data-type="taskList"] li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Completed tasks stay readable but clearly recede. */
+.note__content ul[data-type="taskList"] li[data-checked="true"] > div {
+  color: #8a9099;
+  text-decoration: line-through;
+  text-decoration-color: #c9ced6;
+}
+
+.note__content hr {
+  margin: 10px 0;
+  border: none;
+  border-top: 1px solid #eceef1;
+}
+
+/* Placeholder for an empty note, so a blank window still shows where to type. */
+.note__content p.is-editor-empty:first-child::before {
+  float: left;
+  height: 0;
   color: #a8adb5;
-}
-
-.note__editor:disabled {
-  background-color: #ffffff;
+  pointer-events: none;
+  content: attr(data-placeholder);
 }
 
 .note__error {

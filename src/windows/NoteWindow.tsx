@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createNote, getNote, saveNoteContent, setNotePinned } from "../services/desktop";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { NoteEditor } from "../components/NoteEditor";
+import {
+  EXIT_REQUESTED_EVENT,
+  confirmExitFlush,
+  createNote,
+  getNote,
+  saveNoteContent,
+  setNotePinned,
+} from "../services/desktop";
 import { logError } from "../utils/logger";
 
-/** Quiet period after the last keystroke before text is written to disk. */
+/** Quiet period after the last edit before Markdown is written to disk. */
 const SAVE_DEBOUNCE_MS = 300;
 
 interface NoteWindowProps {
@@ -15,8 +25,9 @@ type SaveState = "idle" | "error";
 /**
  * One sticky note.
  *
- * Plain text only for Phase 1: a `+` button, a `Pin` toggle and a textarea
- * that saves itself. No save button, no markdown, no todos.
+ * Window-level concerns only: loading the note, the `+` / `Pin` bar, and
+ * autosaving the Markdown the editor produces. Markdown handling itself lives
+ * in `editor/markdown.ts` and `components/NoteEditor.tsx`.
  */
 export function NoteWindow({ noteId }: NoteWindowProps) {
   const [content, setContent] = useState("");
@@ -26,8 +37,12 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
   const [error, setError] = useState<string | null>(null);
 
   const saveTimerRef = useRef<number | null>(null);
-  /** Latest text, so an unmount or a failed save can retry the current value. */
+  /** Save currently on its way to Rust, so a quit can wait for it. */
+  const inFlightRef = useRef<Promise<void> | null>(null);
+  /** Newest Markdown not yet handed to Rust, or `null` when all is saved. */
   const pendingRef = useRef<string | null>(null);
+  /** Set once this window is closing, so no save may follow the delete. */
+  const closingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,10 +65,54 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
     };
   }, [noteId]);
 
-  const flushPendingSave = useCallback(() => {
+  const write = useCallback(
+    async (markdown: string) => {
+      const run = (async () => {
+        try {
+          await saveNoteContent(noteId, markdown);
+          setSaveState("idle");
+        } catch (cause) {
+          logError(`could not save note ${noteId}`, cause);
+          setSaveState("error");
+          // Keep the text pending so a later flush can still write it.
+          pendingRef.current = markdown;
+        }
+      })();
+
+      inFlightRef.current = run;
+      try {
+        await run;
+      } finally {
+        if (inFlightRef.current === run) {
+          inFlightRef.current = null;
+        }
+      }
+    },
+    [noteId],
+  );
+
+  /**
+   * Write everything owed to disk right now.
+   *
+   * Returns a promise so the exit handshake can wait for the write to land
+   * before the process is allowed to quit.
+   */
+  const flushPendingSave = useCallback(async () => {
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
+    }
+
+    // An edit made less than one debounce ago may already have started saving;
+    // quitting must not outrun it.
+    while (inFlightRef.current !== null) {
+      await inFlightRef.current;
+    }
+
+    // A closing note must never write. This is what previously let an unmount
+    // flush recreate a JSON file that Rust had just deleted.
+    if (closingRef.current) {
+      return;
     }
 
     const pending = pendingRef.current;
@@ -62,21 +121,12 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
     }
 
     pendingRef.current = null;
-    saveNoteContent(noteId, pending)
-      .then(() => setSaveState("idle"))
-      .catch((cause: unknown) => {
-        logError(`could not save note ${noteId}`, cause);
-        setSaveState("error");
-      });
-  }, [noteId]);
+    await write(pending);
+  }, [write]);
 
-  // Never lose the last keystrokes when the window goes away mid-debounce.
-  useEffect(() => flushPendingSave, [flushPendingSave]);
-
-  const handleChange = useCallback(
-    (value: string) => {
-      setContent(value);
-      pendingRef.current = value;
+  const handleEditorChange = useCallback(
+    (markdown: string) => {
+      pendingRef.current = markdown;
 
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
@@ -84,11 +134,68 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
 
       saveTimerRef.current = window.setTimeout(() => {
         saveTimerRef.current = null;
-        flushPendingSave();
+        void flushPendingSave();
       }, SAVE_DEBOUNCE_MS);
     },
     [flushPendingSave],
   );
+
+  // Stop saving the moment the window begins to close, so the delete that
+  // follows can never be undone by a trailing write.
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+
+    // Effects re-run (React StrictMode does so deliberately in development), so
+    // mounting a fresh watcher must clear the flag again. Without this the
+    // cleanup below would leave the note permanently unable to save.
+    closingRef.current = false;
+
+    getCurrentWindow()
+      .onCloseRequested(() => {
+        closingRef.current = true;
+      })
+      .then((unlisten) => {
+        if (cancelled) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+      })
+      .catch((cause: unknown) => {
+        logError(`could not watch the close of note ${noteId}`, cause);
+      });
+
+    return () => {
+      cancelled = true;
+      closingRef.current = true;
+      stop?.();
+    };
+  }, [noteId]);
+
+  // The app is quitting: save the newest text, then tell Rust this window is
+  // done so the quit can go ahead.
+  useEffect(() => {
+    const unlisten = listen(EXIT_REQUESTED_EVENT, () => {
+      void (async () => {
+        try {
+          await flushPendingSave();
+        } catch (cause) {
+          logError(`could not flush note ${noteId} before exit`, cause);
+        } finally {
+          try {
+            await confirmExitFlush(noteId);
+          } catch (cause) {
+            logError(`could not confirm the exit flush for ${noteId}`, cause);
+          }
+        }
+      })();
+    });
+
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, [flushPendingSave, noteId]);
 
   const handleCreateNote = useCallback(() => {
     createNote().catch((cause: unknown) => logError("could not create a note", cause));
@@ -125,17 +232,9 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
 
       {error ? (
         <p className="note__error">{error}</p>
-      ) : (
-        <textarea
-          className="note__editor"
-          value={content}
-          onChange={(event) => handleChange(event.target.value)}
-          placeholder="Type here…"
-          spellCheck={false}
-          autoFocus
-          disabled={!loaded}
-        />
-      )}
+      ) : loaded ? (
+        <NoteEditor value={content} onChange={handleEditorChange} />
+      ) : null}
     </div>
   );
 }

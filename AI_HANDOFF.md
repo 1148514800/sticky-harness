@@ -75,6 +75,9 @@ on load rather than forking into a second file.
 - Every field except `id` is optional on load, so a partial or
   hand-written file still opens. Geometry is physical pixels; size is the
   inner size, position is the outer position.
+- `content` is Markdown source. The editor turns it into a rich document
+  only in memory; Rust stores the string and does not interpret it. Phase 1
+  plain text is valid Markdown, so old notes open as paragraphs.
 - A file that cannot be parsed is logged and skipped; the other notes still
   load. A saved position with no real overlap with any current monitor is
   replaced by a cascaded position on the primary monitor.
@@ -94,34 +97,41 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 1 — Normal Sticky Notes
+Phase 2 — Markdown / Todo
 
-Status: Completed
+Status: Completed in the working tree (not committed)
 
 Done:
 
-- Real note windows replacing the Phase 0 main / test-note-N test windows.
-- Stable note ids; window label is note-<id>.
-- One JSON file per note under <AppData>/notes/, written atomically.
-- Startup restore of every note, creating one blank note when none exist.
-- Text editing with debounced autosave; no Save button.
-- Debounced persistence of window position, size and always-on-top.
-- Off-screen recovery when a saved position is no longer on any monitor.
-- Closing a note deletes only that note; tray Exit keeps all notes.
-- Tray menu is now New Note / Exit.
-- Corrupt note files are skipped with a warning instead of blocking startup.
+- Phase 1 sticky notes, still one JSON file and one window per note.
+- Note text is Markdown. The window edits it directly; there is no preview
+  mode and no formatting toolbar.
+- Headings, emphasis, lists, quotes, code and links round-trip through the
+  same `content` string.
+- `- [ ] ` / `- [x] ` become checkboxes. Clicking a checkbox rewrites the Markdown.
+- Phase 1 plain text loads as paragraphs, with no migration.
+- Ctrl+click opens an http, https or mailto link in the default app. A plain
+  click only moves the caret, and the webview never navigates.
+- Tray Exit asks every open note to flush, waits up to 1.5s, then quits. A
+  save already in flight does not count as that flush.
+- Closing a note still deletes it. A trailing content, geometry or pin write
+  cannot recreate the file.
 
 Not done (intentionally, do not start without a new task):
 
-- Markdown, todos, rich text, images, search, themes, settings window,
-  global shortcuts, SQLite, harness protocol, harness adapters.
+- Images, search, themes, settings window, global shortcuts, SQLite,
+  harness protocol, harness adapters.
 
 ## 5. Important Files
 
 ```
 src/App.tsx                           Picks the view from this window label
-src/windows/NoteWindow.tsx            One note: + button, Pin, autosaving textarea
-src/services/desktop.ts               Typed wrappers over the Rust note commands
+src/windows/NoteWindow.tsx            One note: + button, Pin, autosave
+src/components/NoteEditor.tsx         WYSIWYG Markdown editor for one note
+src/editor/markdown.ts                 Markdown <-> editor document conversion
+src/editor/todoInput.ts                Turns a typed `- [ ] ` into a checkbox
+src/editor/links.ts                    Which clicks open a link, and which URLs
+src/services/desktop.ts                Typed wrappers over the Rust note commands
 src/types/desktop.ts                  NoteRecord/NoteWindowState + label parsing
 src/utils/logger.ts                   Console logging helpers
 src/styles.css                        Minimal note styling
@@ -142,7 +152,11 @@ src-tauri/tauri.conf.json             No startup window; notes created by Rust
 - `+` in a note, and New Note in the tray, both create another note and never
   collide with existing ids.
 - Typing saves itself shortly after the last keystroke; there is no Save button
-  and no "saved" toast.
+  and no "saved" toast. The stored text is Markdown, including todo checkboxes.
+- Ctrl+click opens a link in the default browser or mail app. A plain click
+  edits it. Anything other than http, https or mailto is ignored.
+- Tray Exit waits up to 1.5s for every open note to finish its last save, then
+  quits. It still never deletes notes.
 - Moving or resizing a note is written back to disk after a short quiet period,
   so restarting restores the layout.
 - Pin toggles always-on-top for that note only, and survives a restart.
@@ -182,6 +196,15 @@ endpoint and real Win32 window messages:
 Off-screen recovery PASS  a note saved at (9000,9000) was pulled back on screen
 ```
 
+That checklist is the Phase 1 run. It has not been repeated since the textarea
+was replaced. Phase 2 was checked on the working tree with:
+
+```
+npm test                  PASS  59 tests (markdown, todos, link rules)
+npm run typecheck         PASS
+cargo check --all-targets PASS (no warnings)
+```
+
 ## 8. Known Issues
 
 - **`fs::rename` can be refused on this machine.** Inside the AppData tree the
@@ -208,18 +231,18 @@ Off-screen recovery PASS  a note saved at (9000,9000) was pulled back on screen
 
 ## 9. Next Step
 
-Next: Phase 2 — Markdown / Todo
+Next: Phase 3 — Desktop experience
 
-Direction only, do not start without a new task: render note text as Markdown
-and/or add todos, still inside the existing one-file-per-note model. Keep
-`notes.rs` the only owner of persistence and keep the single
-`create_and_open` window path.
+Direction only, do not start without a new task. The roadmap name is the whole
+spec so far: do not invent themes, settings, search or shortcuts until a task
+spells them out. Keep `notes.rs` the only owner of persistence and keep the
+single `create_and_open` window path.
 
 ## 10. Latest Commit
 
 Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
-`main`). Created by the commit that produced this state:
+`main`). Phase 2 is local work on top of this commit and has not been committed:
 
 ```
-4b7ca3f5750871eaa1e5348597057aa8c545bd48 feat: add persistent sticky notes
+1b43292 docs: record Phase 1 commit in handoff
 ```

@@ -7,12 +7,12 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
-**Phase 1 — Normal Sticky Notes (Completed)**
+**Phase 2 — Markdown / Todo (Completed)**
 
-The app is now usable as a basic desktop sticky-note tool: every note is its own
-floating window, text saves itself, and window position, size and always-on-top
-come back after a restart. Markdown, todos and harness integration do not exist
-yet.
+Notes are edited as Markdown in the window itself: headings, emphasis, lists,
+code, quotes, links and checkboxes. The file on disk is still one JSON note,
+and `content` is the Markdown string. Ctrl+click opens a web or mail link.
+Images, themes and harness integration are not in yet.
 
 ## Tech Stack
 
@@ -131,16 +131,19 @@ hardcode a path or place user data in the project directory.
 - **Closing every note does not quit the app.** The tray stays alive so you can
   create a note again from **New Note**.
 - **Choosing Exit in the tray quits the process and keeps every note.** Deleting
-  notes on exit is never intended behaviour.
+  notes on exit is never intended behaviour. Exit waits briefly so the last
+  keystrokes can be saved.
+- **Ctrl+click opens a link.** A normal click edits it. Only http, https and
+  mailto links open.
 
 ## Roadmap
 
 - Phase 1 — Normal sticky notes ✅
-- Phase 2 — Markdown / Todo
+- Phase 2 — Markdown / Todo ✅
 - Phase 3 — Desktop experience
 - Phase 4 — Harness Protocol
 - Phase 5 — Harness Task Note
 - Phase 6 — Harness Adapters
 
-Only Phase 1 is implemented. See `AI_HANDOFF.md` for the detailed current
+Phases 1 and 2 are implemented. See `AI_HANDOFF.md` for the detailed current
 state and next step.

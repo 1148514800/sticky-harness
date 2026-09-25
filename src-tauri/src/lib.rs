@@ -10,12 +10,15 @@ use tauri::RunEvent;
 /// Rust; the React layer only renders UI and calls commands.
 pub fn run() {
     let app = match tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .manage(notes::NoteRuntime::default())
         .invoke_handler(tauri::generate_handler![
             notes::new_note,
             notes::get_note,
             notes::save_note_content,
             notes::set_note_pinned,
+            notes::confirm_exit_flush,
+            notes::exit_app,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

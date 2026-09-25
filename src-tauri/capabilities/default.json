@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Base capability applied to every note window.",
   "windows": ["note-*"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "opener:default"]
 }

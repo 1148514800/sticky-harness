@@ -37,13 +37,14 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
                 }
             }
             MENU_ID_EXIT => {
-                // Mark the exit first: `app.exit` closes every window, and
-                // those closes must not be mistaken for user deletes.
-                notes::begin_exit(app);
-
-                // An explicit exit code passes the run loop, unlike a plain
-                // last-window close, which `lib.rs` vetoes.
-                app.exit(0);
+                // Let every note flush its last edit before quitting, so text
+                // typed less than one debounce ago is not lost. The command
+                // sets the exiting flag itself, which stops the window closes
+                // that follow from being mistaken for user deletes.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    notes::exit_app(app).await;
+                });
             }
             other => {
                 eprintln!("[sticky-harness] unhandled tray menu id: {other}");
