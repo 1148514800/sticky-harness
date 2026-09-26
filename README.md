@@ -7,6 +7,14 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 6 — Harness Adapters (Completed)**
+
+Something now produces the harness state the app displays. Two adapters, both
+local and both read-only, poll a harness's own status document: one reads a
+JSON file, one reads a loopback HTTP endpoint. Which ones run is decided by
+`harness-adapters.json`; with no file, nothing runs and the app behaves exactly
+as it did before. See **Harness Adapters** below.
+
 **Phase 5 — Harness Task Note (Completed)**
 
 A read-only "Harness Tasks" window shows what the local harness protocol
@@ -288,6 +296,68 @@ until something reports in. The registry is in-memory only: **after an app
 restart the window is restored (position, size and Pin intact) but the list
 starts empty** until a harness POSTs again.
 
+## Harness Adapters
+
+A harness can report in two ways, and neither needs an SDK:
+
+| Path | How it works |
+| --- | --- |
+| Pull | An adapter reads a JSON file or a loopback HTTP endpoint on a timer |
+| Push | The harness POSTs to `/api/harness/snapshot` itself |
+
+Both end in the same registry, so the Harness Tasks window cannot tell them
+apart. Adapters are configured in `harness-adapters.json` next to the notes
+directory:
+
+```json
+{
+  "adapters": [
+    { "name": "mybot", "kind": "local-json", "path": "C:/tmp/mybot.json" },
+    { "name": "sidecar", "kind": "local-http", "port": 18001 }
+  ]
+}
+```
+
+| Field | Applies to | Meaning |
+| --- | --- | --- |
+| `name` | both | Identity in logs and in the stored snapshot's source |
+| `kind` | both | `local-json` or `local-http` |
+| `enabled` | both | Defaults to `true`; `false` means it never runs |
+| `poll_interval_millis` | both | Defaults to 5000, floor 250, ceiling 600000 |
+| `path` | `local-json` | The file to read |
+| `port` | `local-http` | The loopback port to read |
+| `http_path` | `local-http` | Defaults to `/api/harness/snapshot` |
+| `timeout_millis` | `local-http` | Defaults to 1000 |
+
+An unknown key is an error rather than being ignored, so a typo is reported
+instead of silently disabling the field it was meant to set. A bad
+configuration is logged and the app starts with no adapters: harness reporting
+is a feature, never a prerequisite for notes or the tray.
+
+What the adapters are allowed to do is deliberately small. `local-json` opens
+one file and parses it, and never runs anything. `local-http` only ever
+connects to `127.0.0.1`, with a request timeout and a 256 KB response cap; the
+address is built from the port alone, so a configuration cannot point an adapter
+at a remote host. Both refuse to buffer anything past that cap.
+
+A failing adapter is isolated: it is logged and retried on its next tick, and
+the other adapters keep running untouched. A failure never deletes the harness's
+last good snapshot - the staleness rule retires it instead, so a producer that
+comes back reappears on its own.
+
+Adapters stop when the app exits, so **Exit** in the tray never waits on a
+producer.
+
+### Why there is no Codex or DeepSeek adapter
+
+Both are supported through the paths above - a bridge process that writes a JSON
+file, serves a loopback endpoint, or POSTs to the push endpoint. They are not
+supported by reading their internal state directly, because on this machine
+there is no stable, read-only source for "what is this harness running right
+now". Codex's local database describes past sessions (titles, timestamps,
+archived flags) and has no notion of a currently running task, so an adapter
+built on it could only report guesses.
+
 ## Roadmap
 
 - Phase 1 — Normal sticky notes ✅
@@ -295,7 +365,8 @@ starts empty** until a harness POSTs again.
 - Phase 3 — Desktop experience ✅
 - Phase 4 — Harness Protocol ✅
 - Phase 5 — Harness Task Note ✅
-- Phase 6 — Harness Adapters
+- Phase 6 — Harness Adapters ✅
+- Phase 7 — Adapter Management / Product Polish
 
-Phases 1 to 5 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 6 are implemented, and nothing is pushed anywhere. See
 `AI_HANDOFF.md` for the detailed current state and the next step.

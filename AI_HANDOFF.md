@@ -44,6 +44,21 @@ is local: no account, no sync, no server.
   (`note-<id>`), so the file name is the authoritative id.
 - **Persistence**: `paths.rs` is the only module that resolves the data
   directory; `notes.rs` is the only module that reads or writes note files.
+- **Adapter boundary**: `harness/adapter.rs` owns the *pull* seam - the
+  `HarnessAdapter` trait and the two implementations that read a producer's own
+  document, `LocalJsonAdapter` (one file, read-only, size-capped) and
+  `LocalHttpAdapter` (loopback only, request timeout, 256 KB response cap).
+  `harness/manager.rs` owns their lifecycle: it reads
+  `<AppData>/harness-adapters.json`, runs one worker thread per enabled
+  adapter, isolates a failing adapter from the others, and writes successes
+  into the registry through the very same `HarnessSnapshot` validation the
+  push endpoint uses. An adapter is a *source*, never a path into the app: it
+  cannot write notes or reach the network beyond `127.0.0.1`.
+- **Liveness is local**: `harness/registry.rs` decides what is alive, and the
+  only input is the local clock reading of the last time a snapshot actually
+  *changed*. Nothing compares a producer's clock with ours, so a producer
+  clock that is wrong cannot make its task immortal or instantly dead, and a
+  pull adapter re-reading an unchanged document slowly goes quiet on its own.
 - **Harness boundary**: `harness/protocol.rs` owns what a harness snapshot *is*
   and every validation rule; `harness/registry.rs` owns the running state and is
   the only place that decides what "active" means; `harness/server.rs` is the
@@ -120,46 +135,90 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 5 — Harness Task Note
+Phase 6 — Harness Adapters
 
 Status: Completed
 
 Done:
 
-- Phase 1 sticky notes, Phase 2 Markdown editing, Phase 3 desktop experience.
-- A read-only Harness Task Note in its own window (label `harness-tasks`,
-  title Harness Tasks), opened from Tray -> Harness Tasks.
-- Two note types stay separate. A normal note is user content: Markdown, one
-  JSON file, `X` deletes it. The Harness Task Note is a status view over
-  `HarnessRegistry`: no editor, no note file, and `X` hides it.
-- `HarnessRegistry::list_live_active_tasks()` is the single source of truth for
-  "what is running": active status *and* snapshot not stale. Both
-  `list_active_tasks()` and the live variant share one private collector, so
-  the active rule stays in one place and React never re-derives staleness.
-- Stale exclusion hides, it never deletes. A harness that goes quiet drops out
-  of the window while its snapshot stays in the registry, and the next report
-  brings it back with no mutation in between.
-- Window state is persisted separately from notes:
-  `<AppData>/harness-task-window.json` holds `created`, `x`, `y`,
-  `width`, `height` and `always_on_top` - and no task data.
-- Tray -> Harness Tasks is show/focus/create-once: an existing window is shown
-  and focused, and only a missing one is created.
-- Show All Notes and Hide All Notes now cover the Harness Task Note as well as
-  notes. Hiding closes nothing, deletes nothing and leaves the registry alone;
-  Show All never creates the window if it was never opened.
-- The list polls `list_live_active_harness_tasks` once a second and redraws
-  elapsed times from `started_at` on a local clock tick, so durations do not
-  need a second request.
+- Phases 1 to 5: sticky notes, Markdown editing, desktop experience, the local
+  harness protocol and the Harness Task Note. See 4b and 4c below.
+- Something finally produces the state the app displays. Two adapters poll a
+  harness's own status document and report it through the existing protocol:
+  `LocalJsonAdapter` reads a JSON file, `LocalHttpAdapter` reads a loopback
+  HTTP endpoint.
+- `AdapterManager` owns the whole lifecycle: it loads
+  `<AppData>/harness-adapters.json`, runs one worker thread per enabled
+  adapter, isolates failures, and writes successes into the existing
+  `HarnessRegistry`. No second abstraction: an adapter is still the Phase 4
+  `HarnessAdapter` trait, and a snapshot from an adapter is byte-identical to
+  one that arrived over HTTP push.
+- **Staleness no longer trusts any producer clock.** It is decided only by the
+  local time of the last *new evidence* the app saw:
+
+
+  ```
+  now - received_at > stale_timeout   =>   the snapshot is stale
+  ```
+
+  `received_at` is the app's own clock reading, never the producer's, so a
+  producer whose clock is 30 minutes behind or an hour ahead cannot stale its
+  own snapshot early or late.
+- **A repeated read is not new evidence.** `HarnessRegistry::upsert` compares
+  the incoming snapshot with the stored one and moves `received_at` only when
+  something actually changed (harness id, harness name, `updated_at`, or the
+  task list). A pull adapter that keeps re-reading identical content therefore
+  stops renewing the snapshot's liveness, and a producer that has silently died
+  still goes stale after the timeout even though its file or endpoint is still
+  readable. Real new content - including a producer-side `updated_at` bump or a
+  single task status change - refreshes it immediately.
+- The transport is not evidence. `ValidatedSnapshot::differs_from` deliberately
+  ignores `source`, so re-labelling the same content as it moves between push
+  and pull cannot masquerade as progress.
+- **Push is unchanged and still works as a heartbeat.** A repeated POST of
+  identical content does not need to count as evidence: the arrival of a POST is
+  itself the heartbeat, so push producers keep behaving exactly as they did in
+  Phase 5.
+- Stale still only hides. `list_live_active_tasks()` is still the single
+  consumer of the stale rule, and a stale snapshot is never deleted or
+  overwritten - it stays in the registry, so a producer that starts reporting
+  again reappears with no mutation in between.
+- Failure isolation is per adapter: one adapter's error is logged and retried on
+  its next tick, and every other adapter keeps polling untouched. A failure
+  never clears the last good snapshot.
+- Adapter workers stop on Exit. `AdapterManager::stop` raises a flag and the
+  workers leave within their 50 ms sleep slice, so Tray Exit is never held up by
+  a slow or hanging adapter.
+
+Codex integration mode: Bridge
+
+DeepSeek integration mode: Bridge
+
+Both harnesses are supported through the two standard paths - a bridge process
+that writes a JSON file, serves a loopback endpoint, or POSTs to
+`/api/harness/snapshot`. Neither gets a Direct adapter, because on this machine
+neither exposes a stable, read-only, repeatable source for "what is this harness
+running right now":
+
+- Codex's local `state_5.sqlite` `threads` table holds session metadata only
+  (`id`, `rollout_path`, `created_at`, `updated_at`, `title`, `archived`,
+  `model`, `cwd`). There is no per-thread run status, so any adapter on top of
+  it would report guesses.
+- `codex agents` browses past sessions on a daemon, and
+  `codex app-server daemon version` failed here with
+  `failed to connect to ~/.codex/app-server-control/app-server-control.sock`.
+  Codex Desktop is also the host process of this very app, so a Direct adapter
+  would have nothing external to observe.
+- No equivalent stable status source was found for DeepSeek, so no specialised
+  adapter was written for it either.
 
 Not done (intentionally, do not start without a new task):
 
-- Any real harness integration. No Codex, no DeepSeek, no adapter for either.
-- Task history, completed-task lists, logs, tool calls, a terminal view,
-  search, settings, notifications, SQLite, cloud, authentication, WebSocket
-  and SSE. Polling a registry in the same process is enough.
-- Phase 4's protocol is untouched apart from one addition: a compile-time
-  stale-timeout override used to observe stale exclusion in a real run (see
-  Known Issues).
+- Settings UI, adapter management UI, and any adapter editing outside the JSON
+  file. A malformed or missing configuration is logged, not surfaced in UI.
+- Codex or DeepSeek control, prompt sending, task history, logs, tool calls, a
+  terminal view, search, notifications, SQLite, cloud, authentication,
+  WebSocket, SSE, and any remote network access. Local HTTP means loopback only.
 
 ## 4b. Phase 4 — Harness Protocol (Completed)
 
@@ -180,9 +239,11 @@ Done:
 - Validation rejects empty or oversized ids, empty names, empty titles,
   unknown statuses, malformed timestamps, `updated_at` before `started_at`,
   duplicate task ids, more than 256 tasks and bodies over 256 KB.
-- Staleness is computed, never assumed: a snapshot is stale when
-  `now - max(producer.updated_at, received_at)` passes the timeout. Nothing is
-  deleted on staleness in this phase.
+- Staleness is computed, never assumed, from the app's own clock: a snapshot
+  is stale when `now - received_at` passes the timeout. Phase 4 used the
+  producer's `updated_at` as well; Phase 6 removed that, because it made
+  staleness depend on the producer's clock agreeing with ours (see 4c).
+  Nothing is deleted on staleness.
 - The registry is deliberately not persisted. Harness state describes live
   processes, so an empty registry after a restart is the truth.
 
@@ -213,7 +274,8 @@ src-tauri/src/harness/mod.rs          Harness wiring, Tauri commands, init
 src-tauri/src/harness/protocol.rs     The protocol model, status enum, constants
 src-tauri/src/harness/registry.rs     In-memory snapshots and active filtering
 src-tauri/src/harness/server.rs       Loopback-only push endpoint
-src-tauri/src/harness/adapter.rs      Pull seam + reference local-JSON adapter
+src-tauri/src/harness/adapter.rs      HarnessAdapter trait + LocalJson/LocalHttp
+src-tauri/src/harness/manager.rs      AdapterManager: config, workers, isolation
 src-tauri/src/harness/tests.rs        Core tests (validation, registry, stale)
 src-tauri/capabilities/default.json   Core permissions for note-* and harness-tasks
 src-tauri/tauri.conf.json             No startup window; notes created by Rust
@@ -493,6 +555,74 @@ J  Note regression     PASS  tray New Note, `+`, Markdown heading and
                              is clean and the focus refresh works
 ```
 
+Re-run for Phase 6, which adds the adapters:
+
+```
+npm test                  PASS  85 tests (5 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo test                PASS  95 tests (validation, registry, staleness,
+                                adapters, manager config)
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
+```
+
+Phase 6 (Harness Adapters), run against a live build. Four adapters were
+configured for the run - two local JSON, one local HTTP against a temporary
+loopback bridge, and one quiet source - plus a disabled adapter that must never
+run. Fixtures and the bridge lived outside the repo in %TEMP%\sh-verify; the
+shipping `harness-adapters.json` is `{ "adapters": [] }`:
+
+```
+A  Startup            PASS  4 start lines for 4 enabled adapters and no start
+                            line for the disabled one; GET /health reported
+                            harnesses: 4 with no POST from any of them
+B  Stale, quiet prod  PASS  after > 300 s with every document unchanged,
+                            list_live_active = ["http-harness"] while
+                            list_active still held all 4: the three quiet
+                            pull adapters aged out of the live view. No
+                            snapshot was deleted - all 4 were still in the
+                            registry, and the note showed only the live task
+C  New content        PASS  rewriting one JSON document brought that harness
+                            back into the live view within 3 s with its new
+                            task, without a restart and without a POST
+D  HTTP 500           PASS  the bridge returning 500 logged
+                            "adapter http-bridge poll failed: ... HTTP 500"
+                            and only that adapter; the other three kept
+                            updating on their own ticks
+E  HTTP recovery      PASS  the bridge returning 200 again and the adapter
+                            recovered on its next tick with no restart
+F  HTTP timeout       PASS  a bridge that accepted the connection and never
+                            answered hit the 800 ms adapter timeout
+                            (os error 10060), was logged, and left every other
+                            adapter untouched
+G  JSON file removed  PASS  deleting a source file produced repeated read
+                            failures for that adapter only, and its last good
+                            snapshot stayed in the registry
+H  JSON recovery      PASS  restoring the file replaced the snapshot
+                            automatically on the next tick
+I  Restart refill     PASS  a restart with no push at all left the registry
+                            empty and the adapters refilled it on their first
+                            ticks
+J  Regression         PASS  with adapters running: a new note saved Markdown to
+                            disk, the Harness Task Note stayed live, Hide All
+                            returned 3 and left 0 visible with the tray alive
+                            and the adapters still polling, Show All returned
+                            all 3, and Tray Exit quit in 3.85 s with no
+                            adapter log line afterwards and both note files
+                            intact
+K  Shipping state     PASS  with the fixtures removed and
+                            `harness-adapters.json` back to
+                            `{ "adapters": [] }`, startup logs "no harness
+                            adapters configured" and health is
+                            {"active_tasks":0,"harnesses":0,"status":"ok"}
+```
+
+```
+Codex integration mode: Bridge
+DeepSeek integration mode: Bridge
+```
+
 ## 8. Known Issues
 
 - **Capabilities the frontend needs must be granted explicitly.**
@@ -549,7 +679,9 @@ J  Note regression     PASS  tray New Note, `+`, Markdown heading and
   and no notification, which is deliberate for a status surface.
 - **Elapsed time is computed from `started_at` in the UI.** A producer that
   reports a wrong or future `started_at` will show a wrong duration; negative
-  values are clamped to `00:00`.
+  values are clamped to `00:00`. This is the one place a producer clock is
+  still trusted, and it is cosmetic only: staleness and the live view no
+  longer read producer time at all.
 - **The push endpoint has no authentication.** It is bound to loopback only and
   sends no CORS header, so a local process can post harness state and a web page
   cannot read it cross-origin. That is the intended boundary for local IPC; it
@@ -565,39 +697,80 @@ J  Note regression     PASS  tray New Note, `+`, Markdown heading and
   that live in %TEMP%\sh-verify and are not part of the repo; re-create them
   if runtime behaviour must be re-tested.
 
+- **Staleness is now "last new evidence", so a producer that reports the same
+  content for a long time goes stale even while it is still reachable.** That is
+  the intended rule: a re-read of an unchanged document says nothing about
+  whether the work is alive, and depending on the producer's clock to say it
+  would put a clock outside the app in charge of the app's own liveness. The
+  cost is that an adapter whose producer reports only coarse changes - say, one
+  status write per hour - will be hidden between writes. The fix belongs on the
+  producing side (bump `updated_at` in the document) or in a future
+  per-snapshot heartbeat field, not in loosening the rule.
+- **Push still counts as a heartbeat and Pull no longer does.** A repeated
+  `POST` of byte-identical content refreshes the snapshot, because receiving a
+  report is itself the event; a repeated *read* of byte-identical content does
+  not. This asymmetry is deliberate and is the only behavioural difference left
+  between the two paths.
+- **`differs_from` compares content, not arrival.** It looks at
+  `harness_id`, `harness_name`, `updated_at` and the task list, and
+  deliberately ignores `source`. A producer that rewrites the same JSON with a
+  new `updated_at` every tick therefore stays permanently live; only the
+  producer can be blamed for that, and a future phase may want a monotonic
+  producer sequence number instead.
+- **Adapter polling is a fixed interval per adapter, with no backoff.** A
+  failing adapter retries every `poll_interval_millis` (5 s by default,
+  250 ms floor), which is fine for local files and loopback HTTP and would be
+  wrong for anything remote. Remote is out of scope by design.
+- **`local-http` accepts only a `Content-Length` body.** A chunked response is
+  not supported, for the same reason the push endpoint does not parse chunked
+  requests: a local snapshot does not need it.
+- **`harness-adapters.json` is hand-edited and has no UI.** An unknown key, a
+  duplicate name, a bad kind or an out-of-range value is logged and the whole
+  file is rejected, so the app starts with no adapters rather than a partial
+  set. There is no settings screen, no validation feedback in the UI and no
+  reload without a restart - extending the running configuration is Phase 7's
+  problem.
+- **An adapter can only ever add harness state, never inspect the app.** It
+  writes into `HarnessRegistry` through the same validated `HarnessSnapshot`
+  contract as the push endpoint, so an adapter cannot create a note, touch
+  `notes/`, or send anything anywhere. `local-json` never executes what it
+  reads, and `local-http` only ever connects to `127.0.0.1`.
+- **Adapter workers sleep in 50 ms slices to make Exit quick.** That is the
+  only thing keeping a 5-minute poll interval from delaying the tray; it costs
+  a wakeup every 50 ms per adapter, which is irrelevant at this scale but should
+  be revisited if adapters ever became numerous.
+
 ## 9. Next Step
 
-Next: Phase 6 — Harness Adapters
+Next: Phase 7 — Adapter Management / Product Polish
 
-Direction only, do not start without a new task.
+Phase 6 is done: harness state is produced by real adapters, not by hand, and
+the stale rule is finally honest about what it measures.
 
-Phases 1-5 gave the app its own state: a protocol for harness reports, a
-registry that holds them, and a window that shows what is running. Nothing
-produces those reports yet, so the window only fills when something POSTs to
-`http://127.0.0.1:17899/api/harness/snapshot` by hand.
+What Phase 6 deliberately left alone, and what Phase 7 is for:
 
-Phase 6 is the other half of that: producers.
+- Adapters are configured by hand-editing `<AppData>/harness-adapters.json`.
+  There is no UI, no validation feedback and no reload without a restart. A
+  Phase 7 can add a management surface and a live reload while keeping the file
+  format as the contract.
+- Nothing about `HarnessAdapter` needs redesigning to do that. An adapter is
+  still one trait, two implementations, one manager, one registry. Do not add a
+  second abstraction, a plugin loader, a scripting host or per-adapter SDKs.
+- The remaining product polish from earlier phases is still open: images,
+  themes, search and a settings window. The adapter management surface is the
+  natural place to put the harness settings, and the two should not become two
+  separate screens.
 
-- Adapters report *into* the existing protocol. `HarnessSnapshot` and
-  `HarnessStatus` are already the contract; do not change the model to fit a
-  particular tool.
-- `harness/adapter.rs` already holds the reference local-JSON adapter and the
-  pull seam. Read it before adding a second adapter, and follow its shape.
-- One adapter per harness, each with its own id and name, so several can report
-  at once and the existing grouping keeps working unchanged.
-- Mapping a producer's real states onto `running` / `waiting` / `failed` /
-  `completed` / `cancelled` is the hard part. If a state cannot be mapped
-  honestly, report `unknown` rather than guessing.
-- The Harness Task Note must not need changes: it reads
-  `list_live_active_harness_tasks`, so an adapter that reports well shows up on
-  its own.
+Still out of scope, and still worth refusing:
 
-Anything Phase 6 should not become:
-
-- No task history, no log or tool-call viewer, no terminal, no settings screen,
-  no notifications, no SQLite, no cloud, no authentication, no WebSocket or SSE.
-- No adapter may write into `notes/` or into note JSON. Note content stays
-  user content.
+- No task history, log or tool-call viewer, no terminal, no notifications, no
+  SQLite, no cloud, no authentication, no WebSocket or SSE.
+- No remote network. `local-http` means loopback, and it should keep meaning
+  loopback.
+- Still no Direct Codex or DeepSeek adapter. The conclusion stands until one of
+  them publishes a stable, documented, read-only "currently running" source;
+  until then Bridge is the honest answer, and a fake Direct adapter would be a
+  regression dressed up as a feature.
 
 ## 10. Latest Commit
 
@@ -614,12 +787,14 @@ c1c1f85 docs: record Phase 2 commit in handoff
 2c8c872 feat: edit notes as markdown with todos         (Phase 2)
 
 7fa106b feat: add harness task note                   (Phase 5)
-aba0dcb docs: record the Phase 5 commit in the handoff
+b70e5a6 docs: record the Phase 5 commit in the handoff
 ```
 
-Every commit is local. Nothing has been pushed. Phase 5 adds the Harness Task
-Note: `src-tauri/src/harness_window.rs`, the live-active filter in
-`harness/registry.rs`, `list_live_active_harness_tasks`, the tray item and the
-Show All / Hide All integration, plus `HarnessTaskWindow.tsx`,
-`HarnessTaskList.tsx`, `harness/elapsed.ts` and `harness/grouping.ts`. No
-existing commit was rewritten or squashed.
+Every commit is local. Nothing has been pushed. Phase 6 adds the adapters:
+`harness/manager.rs` (config, workers, failure isolation, shutdown),
+`harness/adapter.rs` (the `HarnessAdapter` trait plus `LocalJsonAdapter` and
+`LocalHttpAdapter`), the config path in `paths.rs`, `start_adapters` and
+`stop_adapters` in `harness/mod.rs`, the Exit wiring in `lib.rs`, and the
+clock-independent stale rule in `protocol.rs` / `registry.rs`. No existing
+commit was rewritten or squashed.
+

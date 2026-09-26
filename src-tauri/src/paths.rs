@@ -43,3 +43,12 @@ pub fn notes_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn harness_task_window_config(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(ensure_app_data_dir(app)?.join("harness-task-window.json"))
 }
+
+/// Resolve `<app data>/harness-adapters.json`.
+///
+/// The adapter configuration is app configuration, not user content and not
+/// harness state, so it lives beside `notes/` rather than inside it. A missing
+/// file simply means no adapters are configured.
+pub fn harness_adapters_config(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(ensure_app_data_dir(app)?.join("harness-adapters.json"))
+}

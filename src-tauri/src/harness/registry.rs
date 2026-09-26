@@ -71,24 +71,45 @@ impl HarnessRegistry {
     /// `harness_id`: a harness that reports again is updated, never duplicated,
     /// which is what keeps "how many harnesses are running" honest. A rejected
     /// snapshot leaves the registry exactly as it was.
+    ///
+    /// **Arrival time only moves on real change.** A push is always a
+    /// heartbeat - the producer chose to speak - but a *pull* adapter re-reads
+    /// its source on a timer whether or not anything happened, so treating every
+    /// poll as proof of life would let a document whose writer had stopped stay
+    /// "live" forever. Identical content therefore keeps the existing
+    /// `received_at`, and the snapshot ages out on schedule.
     pub fn upsert(&self, snapshot: HarnessSnapshot) -> Result<ValidatedSnapshot, ProtocolError> {
         let snapshot = snapshot.validate()?;
-        let stored = ValidatedSnapshot {
-            snapshot,
-            received_at: now_millis(),
-        };
 
         let mut snapshots = Self::lock(&self.snapshots);
+        let previous = snapshots.get(&snapshot.harness_id);
+
+        // A re-read of the same document is not new evidence. Anything else -
+        // including a first report - is.
+        let changed = match previous {
+            Some(existing) => existing.differs_from(&ValidatedSnapshot {
+                snapshot: snapshot.clone(),
+                received_at: 0,
+            }),
+            None => true,
+        };
+
+        let received_at = if changed {
+            now_millis()
+        } else {
+            previous.map(|existing| existing.received_at).unwrap_or_else(now_millis)
+        };
+
+        let stored = ValidatedSnapshot { snapshot, received_at };
         snapshots.insert(stored.snapshot.harness_id.clone(), stored.clone());
         Ok(stored)
     }
 
-    /// Install an already-validated snapshot, skipping validation.
+    /// Validate a snapshot and store it with an explicit arrival time.
     ///
-    /// Used by tests and by an eventual trusted adapter, which has already had
-    /// its output validated once. Not called by the app in this phase, so the
-    /// dead-code lint is silenced deliberately instead of deleting the seam.
-    #[allow(dead_code)]
+    /// Used by tests to age a snapshot so staleness can be judged without
+    /// sleeping. The app always goes through [`Self::upsert`].
+    #[cfg(test)]
     pub fn store(&self, snapshot: ValidatedSnapshot) {
         let mut snapshots = Self::lock(&self.snapshots);
         snapshots.insert(snapshot.snapshot.harness_id.clone(), snapshot);

@@ -10,8 +10,11 @@
 //!   live processes and is therefore ephemeral by nature.
 //! - [`server`] is the push transport, a loopback-only HTTP endpoint that
 //!   translates requests into registry calls and nothing more.
-//! - [`adapter`] is the pull seam. Only a reference local-JSON adapter exists,
-//!   because Phase 4 must prove the architecture without integrating a vendor.
+//! - [`adapter`] is the pull seam: local JSON and loopback HTTP adapters that
+//!   read a harness's own status document.
+//! - [`manager`] owns the adapter configuration, the polling loop, failure
+//!   isolation and shutdown. Adapters report into the same registry the push
+//!   endpoint writes to; nothing downstream can tell the two apart.
 //!
 //! Why the boundary sits here: a Codex or DeepSeek adapter belongs *in front of*
 //! this model, translating its own format into [`protocol::HarnessSnapshot`].
@@ -20,6 +23,7 @@
 //! new adapter and nothing else moves.
 
 pub mod adapter;
+pub mod manager;
 pub mod protocol;
 pub mod registry;
 pub mod server;
@@ -36,18 +40,45 @@ use registry::{ActiveHarnessTask, HarnessRegistry};
 /// A newtype because `Arc<HarnessRegistry>` cannot be `State` and an owned
 /// handle at the same time: the server needs one clone while commands borrow
 /// the other.
-pub struct HarnessState(pub Arc<HarnessRegistry>);
+pub struct HarnessState {
+    registry: Arc<HarnessRegistry>,
+    /// The running adapters, if any. Held so the exit path can stop them
+    /// without waiting on a producer.
+    manager: std::sync::Mutex<Option<manager::AdapterManager>>,
+}
 
 impl Default for HarnessState {
     fn default() -> Self {
-        Self(Arc::new(HarnessRegistry::default()))
+        Self::from_registry(Arc::new(HarnessRegistry::default()))
     }
 }
 
 impl HarnessState {
+    /// A state around an existing registry, with no adapters yet.
+    pub fn from_registry(registry: Arc<HarnessRegistry>) -> Self {
+        Self {
+            registry,
+            manager: std::sync::Mutex::new(None),
+        }
+    }
+
     /// The shared registry.
     pub fn registry(&self) -> &Arc<HarnessRegistry> {
-        &self.0
+        &self.registry
+    }
+
+    /// Remember the adapters that were started.
+    pub fn set_manager(&self, manager: manager::AdapterManager) {
+        let mut slot = self.manager.lock().unwrap_or_else(|error| error.into_inner());
+        *slot = Some(manager);
+    }
+
+    /// Ask every adapter to stop. Safe to call more than once.
+    pub fn stop_adapters(&self) {
+        let slot = self.manager.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(manager) = slot.as_ref() {
+            manager.stop();
+        }
     }
 }
 
@@ -59,7 +90,11 @@ impl HarnessState {
 /// of failing.
 pub fn init() -> HarnessState {
     let registry = Arc::new(HarnessRegistry::default());
-    let state = HarnessState(Arc::clone(&registry));
+    let state = HarnessState::from_registry(Arc::clone(&registry));
+
+    // Adapters are pull producers. They start here so their first poll lands
+    // before the first restore, and so the push endpoint and the adapters share
+    // one registry rather than two sources of truth.
 
     match server::start(Arc::clone(&registry), server::default_port()) {
         server::ServerState::Listening(address) => {
@@ -75,6 +110,30 @@ pub fn init() -> HarnessState {
     }
 
     state
+}
+
+/// Start the configured adapters against an existing state.
+///
+/// Separate from [`init`] because it needs the app's data directory, which only
+/// exists once Tauri has an app handle. Failing to start adapters is never
+/// fatal: a bad configuration file leaves the app with the push endpoint and
+/// nothing else, which is exactly what a missing configuration means.
+pub fn start_adapters(app: &tauri::AppHandle, state: &HarnessState) -> manager::RunState {
+    let config = manager::load_config_for(app);
+    let manager = manager::AdapterManager::start(Arc::clone(state.registry()), &config);
+    let run_state = manager.state();
+
+    match run_state {
+        manager::RunState::Idle => {
+            println!("[sticky-harness] no harness adapters configured");
+        }
+        manager::RunState::Running(count) => {
+            println!("[sticky-harness] {count} harness adapter(s) running");
+        }
+    }
+
+    state.set_manager(manager);
+    run_state
 }
 
 /// Every active harness task, including ones from a harness that went quiet.

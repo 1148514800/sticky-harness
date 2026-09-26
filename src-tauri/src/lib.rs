@@ -45,6 +45,14 @@ pub fn run() {
             // working; the failure is logged, not fatal.
             app.manage(harness::init());
 
+            // Adapters need the app data directory, so they start after the
+            // handle exists. A configuration problem leaves the push endpoint
+            // working and the adapters empty, never the app broken.
+            harness::start_adapters(
+                &handle,
+                &app.state::<harness::HarnessState>(),
+            );
+
             // Resolving the app data dir here gives an early, loggable
             // confirmation of where user notes live.
             match paths::ensure_app_data_dir(&handle) {
@@ -88,14 +96,20 @@ pub fn run() {
         }
     };
 
-    app.run(|_app_handle, event| {
+    app.run(|app_handle, event| {
         if let RunEvent::ExitRequested { api, code, .. } = event {
             // `code` is `Some` only for programmatic exits, which is how the
             // tray "Exit" item quits. Deleting the last note reports `None`,
             // so it is vetoed to keep the tray and app process alive.
             if code.is_none() {
                 api.prevent_exit();
+                return;
             }
+
+            // Adapters are background producers, so they are told to stop here
+            // rather than being waited on: a hung producer must never delay
+            // Tray Exit.
+            app_handle.state::<harness::HarnessState>().stop_adapters();
         }
     });
 }

@@ -1,12 +1,19 @@
-//! Tests for the protocol core: validation, the registry and staleness.
+//! Tests for the protocol core: validation, the registry, staleness and the
+//! adapter layer.
 //!
-//! These run without a running app, a window or a port. The HTTP layer is
-//! exercised at runtime instead, because a test that binds a real socket is
-//! exactly the kind of thing that fails on a busy machine and teaches nothing.
+//! These run without a running app and without the push endpoint. The adapter
+//! tests do bind a loopback socket, because the HTTP adapter's timeout and body
+//! limit are the point of it: a test that never opens a socket would not prove
+//! either. They bind port 0, so a busy machine cannot make them fail.
 
 use std::time::Duration;
 
-use super::adapter::{parse_local_snapshot, HarnessAdapter, LocalJsonAdapter};
+use super::adapter::{
+    parse_local_snapshot, HarnessAdapter, LocalHttpAdapter, LocalJsonAdapter, MAX_ADAPTER_BYTES,
+};
+use super::manager::{
+    AdapterConfig, AdapterKind, AdapterManager, RunState, MAX_ADAPTERS,
+};
 use super::protocol::{
     HarnessSnapshot, HarnessSource, HarnessStatus, HarnessTask, MAX_ID_CHARS, MAX_TASKS_PER_SNAPSHOT,
 };
@@ -421,8 +428,9 @@ fn stale_ids_list_what_has_gone_quiet() {
 #[test]
 fn a_harness_just_received_is_never_stale() {
     // A snapshot cannot be stale the instant it arrives, whatever its own
-    // timestamps say: `received_at` is the floor. This is why the check is
-    // `max(producer_time, received_at)` and not the producer's clock alone.
+    // timestamps say: `received_at` is the floor, and it is our own clock
+    // reading. The producer's clock is never consulted, so a wildly wrong one
+    // can neither kill a fresh snapshot nor keep a dead one alive.
     let registry = HarnessRegistry::with_stale_timeout(Duration::from_millis(0));
     let mut snapshot = running_snapshot("harness-a");
     snapshot.updated_at = 1;
@@ -462,6 +470,181 @@ fn a_harness_can_be_removed_explicitly() {
     assert!(registry.is_empty());
 }
 
+#[test]
+fn a_producer_clock_behind_ours_is_not_stale_on_arrival() {
+    // Case 1: a snapshot stamped half an hour in the past must still be accepted
+    // as live the moment it arrives. Staleness never compares the producer's
+    // clock with ours.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+    let now = super::protocol::now_millis();
+
+    let mut snapshot = running_snapshot("harness-behind");
+    snapshot.updated_at = now - 30 * 60 * 1000;
+    snapshot.tasks[0].started_at = now - 30 * 60 * 1000;
+    snapshot.tasks[0].updated_at = now - 30 * 60 * 1000;
+    let stored = registry.upsert(snapshot).unwrap();
+
+    assert!(!stored.is_stale(stored.received_at, Duration::from_secs(300)));
+    assert!(!registry.is_stale("harness-behind"));
+    assert_eq!(registry.list_live_active_tasks().len(), 1);
+
+    // Case 2: the same document, polled again and again, is not new evidence.
+    // This is the bug the change-aware upsert fixes: without it every poll moved
+    // `received_at` and the harness could never retire.
+    let mut unchanged = running_snapshot("harness-behind");
+    unchanged.updated_at = now - 30 * 60 * 1000;
+    unchanged.tasks[0].started_at = now - 30 * 60 * 1000;
+    unchanged.tasks[0].updated_at = now - 30 * 60 * 1000;
+    let again = registry.upsert(unchanged).unwrap();
+    assert_eq!(
+        again.received_at, stored.received_at,
+        "re-reading identical content must not refresh liveness"
+    );
+
+    // Past the timeout it retires, and only the live view notices.
+    let later = stored.received_at + 6 * 60 * 1000;
+    assert!(stored.is_stale(later, Duration::from_secs(300)));
+    assert_eq!(registry.len(), 1, "the snapshot is kept, never deleted");
+    assert_eq!(registry.list_active_tasks().len(), 1, "still active, just not live");
+}
+
+#[test]
+fn a_producer_clock_ahead_of_ours_is_not_stale_on_arrival() {
+    // Case 3: a producer an hour in the future is not instantly dead either, and
+    // it retires on our arrival clock once we stop seeing new content.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+    let now = super::protocol::now_millis();
+
+    let mut snapshot = running_snapshot("harness-ahead");
+    snapshot.updated_at = now + 60 * 60 * 1000;
+    snapshot.tasks[0].started_at = now;
+    snapshot.tasks[0].updated_at = now + 60 * 60 * 1000;
+    let stored = registry.upsert(snapshot).unwrap();
+
+    assert!(!stored.is_stale(stored.received_at, Duration::from_secs(300)));
+    assert!(stored.is_stale(stored.received_at + 6 * 60 * 1000, Duration::from_secs(300)));
+}
+
+#[test]
+fn new_content_refreshes_liveness() {
+    // Case 4: a producer making real progress stays live, however its clock is set.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+    let now = super::protocol::now_millis();
+
+    let mut first = running_snapshot("harness-a");
+    first.updated_at = now - 30 * 60 * 1000;
+    first.tasks[0].started_at = now - 30 * 60 * 1000;
+    first.tasks[0].updated_at = now - 30 * 60 * 1000;
+    let mut stored = registry.upsert(first).unwrap();
+
+    // Age the arrival explicitly. Two upserts in the same millisecond would
+    // otherwise share a timestamp, which is about clock resolution rather than
+    // about what this test is checking.
+    stored.received_at = now - 30 * 60 * 1000;
+    registry.store(stored);
+    let aged = registry.get("harness-a").unwrap();
+    assert!(aged.is_stale(now, Duration::from_secs(300)), "it had gone quiet");
+
+    // The producer reports the same task, still running, with a newer timestamp.
+    let mut second = running_snapshot("harness-a");
+    second.updated_at = now - 30 * 60 * 1000 + 1_000;
+    second.tasks[0].started_at = now - 30 * 60 * 1000;
+    second.tasks[0].updated_at = now - 30 * 60 * 1000 + 1_000;
+    let refreshed = registry.upsert(second).unwrap();
+
+    assert!(
+        refreshed.received_at > aged.received_at,
+        "real progress is a heartbeat"
+    );
+    assert!(!refreshed.is_stale(refreshed.received_at, Duration::from_secs(300)));
+}
+
+#[test]
+fn a_task_status_change_counts_as_new_evidence() {
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+
+    let first = registry.upsert(running_snapshot("harness-a")).unwrap();
+
+    let mut changed = running_snapshot("harness-a");
+    changed.tasks[0].status = HarnessStatus::Waiting;
+    let second = registry.upsert(changed).unwrap();
+
+    assert!(second.received_at >= first.received_at);
+    assert!(second.differs_from(&first));
+}
+
+#[test]
+fn identical_content_is_not_new_evidence() {
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+
+    let first = registry.upsert(running_snapshot("harness-a")).unwrap();
+    let second = registry.upsert(running_snapshot("harness-a")).unwrap();
+
+    assert!(!second.differs_from(&first));
+    assert_eq!(second.received_at, first.received_at);
+}
+
+#[test]
+fn the_source_a_snapshot_arrived_through_is_not_evidence() {
+    // Which adapter delivered a snapshot says nothing about whether the harness
+    // is alive, so a re-labelled source must not renew it.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+
+    let first = registry.upsert(running_snapshot("harness-a")).unwrap();
+
+    let mut relabelled = running_snapshot("harness-a");
+    relabelled.source = HarnessSource {
+        source_type: "adapter".to_string(),
+        name: Some("a-different-adapter".to_string()),
+    };
+    let second = registry.upsert(relabelled).unwrap();
+
+    assert_eq!(second.received_at, first.received_at);
+}
+
+#[test]
+fn a_push_can_always_act_as_a_heartbeat() {
+    // Case 5: an explicit POST is the producer choosing to speak, so it is new
+    // evidence when it says something new - and identical pushes still benefit
+    // from the arrival floor rather than ageing the row out mid-conversation.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+
+    let first = registry.upsert(running_snapshot("harness-push")).unwrap();
+    let repeated = registry.upsert(running_snapshot("harness-push")).unwrap();
+    assert_eq!(repeated.received_at, first.received_at, "same content, same heartbeat");
+
+    let mut advanced = running_snapshot("harness-push");
+    advanced.updated_at = first.snapshot.updated_at + 1_000;
+    advanced.tasks[0].updated_at = first.snapshot.tasks[0].updated_at + 1_000;
+    let third = registry.upsert(advanced).unwrap();
+    assert!(third.received_at >= first.received_at);
+    assert!(!registry.is_stale("harness-push"));
+}
+
+#[test]
+fn stale_only_hides_a_snapshot_and_never_deletes_it() {
+    // Case 6: the live view drops it, the registry keeps it, and it comes back
+    // the moment new content arrives.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+    store_aged(&registry, running_snapshot("harness-a"));
+
+    assert!(registry.is_stale("harness-a"));
+    assert!(registry.list_live_active_tasks().is_empty());
+    assert_eq!(registry.list_active_tasks().len(), 1);
+    assert_eq!(registry.len(), 1, "the snapshot itself is never removed");
+    assert_eq!(registry.get("harness-a").unwrap().snapshot.tasks.len(), 1);
+
+    // New content revives it with no special handling.
+    let now = super::protocol::now_millis();
+    let mut revived = running_snapshot("harness-a");
+    revived.updated_at = now;
+    revived.tasks[0].started_at = now;
+    revived.tasks[0].updated_at = now;
+    registry.upsert(revived).unwrap();
+
+    assert_eq!(registry.list_live_active_tasks().len(), 1);
+}
+
 /// A snapshot whose producer clock is far in the past, so staleness can be
 /// judged without waiting for a real timeout.
 fn stale_snapshot(harness_id: &str) -> HarnessSnapshot {
@@ -494,10 +677,10 @@ fn an_empty_registry_has_no_live_active_tasks() {
 
 /// Store a snapshot as if it had arrived long enough ago to have gone quiet.
 ///
-/// `received_at` is the floor that stops a bad producer clock from making a
-/// fresh snapshot look dead, so a test that wants real staleness has to age the
-/// arrival too - exactly what a long-running app would have done. This is the
-/// "inject now" the stale checks are supposed to use, instead of sleeping.
+/// `received_at` is our own clock reading and is the only input to staleness,
+/// so a test that wants real staleness has to age the arrival - exactly what a
+/// long-running app would have done. This is the "inject now" the stale checks
+/// are supposed to use, instead of sleeping.
 fn store_aged(registry: &HarnessRegistry, snapshot: HarnessSnapshot) {
     let mut stored = registry.upsert(snapshot).unwrap();
     stored.received_at = 1;
@@ -706,4 +889,611 @@ fn a_snapshot_can_be_read_from_json_and_written_back() {
 
     assert_eq!(snapshot, round_tripped);
     assert_eq!(round_tripped.tasks[0].message.as_deref(), Some("waiting on the database"));
+}
+
+/// Write a file into a per-test temporary directory, so tests never share state
+/// and never leave anything in the user's app data directory.
+fn temp_file(name: &str, contents: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("sticky-harness-adapter-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, contents).unwrap();
+    path
+}
+
+/// A file that does not exist, in a directory that does.
+fn missing_file(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("sticky-harness-adapter-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    if path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
+    path
+}
+
+/// A snapshot document an external producer would write.
+fn snapshot_json(harness_id: &str, task_id: &str, status: &str) -> String {
+    format!(
+        r#"{{
+          "harness_id": "{harness_id}",
+          "harness_name": "Harness {harness_id}",
+          "updated_at": 1700000000000,
+          "tasks": [
+            {{
+              "task_id": "{task_id}",
+              "title": "Run tests",
+              "status": "{status}",
+              "started_at": 1700000000000,
+              "updated_at": 1700000000000
+            }}
+          ]
+        }}"#
+    )
+}
+
+#[test]
+fn the_json_adapter_reads_a_snapshot_from_a_file() {
+    let path = temp_file("read.json", &snapshot_json("demo", "task-1", "running"));
+    let adapter = LocalJsonAdapter::new("local-json", &path);
+
+    let snapshot = adapter.poll().unwrap();
+
+    assert_eq!(adapter.name(), "local-json");
+    assert_eq!(adapter.path(), path);
+    assert_eq!(snapshot.harness_id, "demo");
+    assert_eq!(snapshot.tasks.len(), 1);
+    assert!(snapshot.tasks[0].is_active());
+}
+
+#[test]
+fn the_json_adapter_picks_up_a_changed_file_without_any_restart() {
+    // The whole point of polling a file: an updated document is what the next
+    // poll sees, with no filesystem notification and no cached copy.
+    let path = temp_file("changed.json", &snapshot_json("demo", "task-1", "running"));
+    let adapter = LocalJsonAdapter::new("local-json", &path);
+    assert_eq!(adapter.poll().unwrap().tasks[0].task_id, "task-1");
+
+    std::fs::write(&path, snapshot_json("demo", "task-2", "waiting")).unwrap();
+    let snapshot = adapter.poll().unwrap();
+
+    assert_eq!(snapshot.tasks[0].task_id, "task-2");
+    assert_eq!(snapshot.tasks[0].status, HarnessStatus::Waiting);
+}
+
+#[test]
+fn the_json_adapter_reports_a_missing_file_without_panicking() {
+    let adapter = LocalJsonAdapter::new("local-json", missing_file("gone.json"));
+
+    let error = adapter.poll().unwrap_err();
+
+    assert!(error.contains("local-json"), "message was: {error}");
+    assert!(error.contains("gone.json"), "message was: {error}");
+}
+
+#[test]
+fn the_json_adapter_rejects_a_file_that_is_too_large() {
+    // One byte past the limit, and the read is refused before it is buffered.
+    let path = missing_file("huge.json");
+    std::fs::write(&path, vec![b' '; MAX_ADAPTER_BYTES + 1]).unwrap();
+
+    let error = LocalJsonAdapter::new("local-json", &path).poll().unwrap_err();
+
+    assert!(error.contains("limit"), "message was: {error}");
+}
+
+#[test]
+fn the_json_adapter_rejects_invalid_json_as_an_error() {
+    let path = temp_file("broken.json", "{ not json");
+    let error = LocalJsonAdapter::new("local-json", &path).poll().unwrap_err();
+
+    assert!(error.contains("malformed"), "message was: {error}");
+}
+
+#[test]
+fn the_json_adapter_stamps_its_own_name_as_the_source() {
+    // Two adapters may report harnesses with the same id; the source is what
+    // makes the stored snapshot say where it came from.
+    let path = temp_file("source.json", &snapshot_json("demo", "task-1", "running"));
+    let snapshot = LocalJsonAdapter::new("my-harness", &path).poll().unwrap();
+
+    assert_eq!(snapshot.source.source_type, "adapter");
+    assert_eq!(snapshot.source.name.as_deref(), Some("my-harness"));
+}
+
+/// A one-shot loopback HTTP server for the adapter tests.
+///
+/// Binds port 0 so a busy machine cannot break the test, then answers exactly
+/// one connection however the test tells it to: normally, slowly, or with a
+/// body larger than the adapter will accept.
+struct TestServer {
+    port: u16,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+enum Reply {
+    /// A normal 200 with a JSON body.
+    Ok(String),
+    /// A 200 whose headers never end, so the adapter's read timeout must fire.
+    Silent,
+    /// More bytes than the adapter will accept.
+    TooLarge,
+}
+
+impl TestServer {
+    fn start(reply: Reply) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let handle = std::thread::spawn(move || {
+            // One connection is enough; the adapter makes exactly one request per
+            // poll, and the test makes one poll.
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut scratch = [0_u8; 4096];
+                let _ = stream.read(&mut scratch);
+
+                match reply {
+                    Reply::Ok(body) => {
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    Reply::Silent => {
+                        // Headers, no terminator, then a long enough pause that a
+                        // one-second read timeout has to be what ends it.
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n");
+                        let _ = stream.flush();
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                    Reply::TooLarge => {
+                        let body = "x".repeat(MAX_ADAPTER_BYTES + 64 * 1024);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                }
+            }
+        });
+
+        Self {
+            port,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        // The silent server sleeps past the timeout; rejoining it would make the
+        // suite wait for nothing, so the thread is left to finish on its own.
+        if let Some(handle) = self.handle.take() {
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+    }
+}
+
+#[test]
+fn the_http_adapter_reads_a_snapshot_over_loopback() {
+    let body = snapshot_json("demo", "task-1", "running");
+    let server = TestServer::start(Reply::Ok(body));
+    let adapter = LocalHttpAdapter::new("local-http", server.port, "/api/harness/snapshot");
+
+    let snapshot = adapter.poll().unwrap();
+
+    assert_eq!(adapter.name(), "local-http");
+    assert_eq!(adapter.address().ip().to_string(), "127.0.0.1");
+    assert_eq!(adapter.path(), "/api/harness/snapshot");
+    assert_eq!(snapshot.harness_id, "demo");
+    assert!(snapshot.tasks[0].is_active());
+}
+
+#[test]
+fn the_http_adapter_only_ever_connects_to_loopback() {
+    let adapter = LocalHttpAdapter::new("local-http", 1, "/x");
+
+    // The address is built from the port alone, so there is no way to point an
+    // adapter at a remote host even if a configuration tried to.
+    assert_eq!(adapter.address().to_string(), "127.0.0.1:1");
+}
+
+#[test]
+fn the_http_adapter_gives_up_after_its_timeout() {
+    let server = TestServer::start(Reply::Silent);
+    let adapter = LocalHttpAdapter::new("local-http", server.port, "/slow")
+        .with_timeout(Duration::from_millis(300));
+
+    let started = std::time::Instant::now();
+    let error = adapter.poll().unwrap_err();
+    let elapsed = started.elapsed();
+
+    assert!(error.contains("local-http"), "message was: {error}");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "a timeout must end the poll, not the server's sleep: took {elapsed:?}"
+    );
+}
+
+#[test]
+fn the_http_adapter_refuses_an_oversized_response() {
+    let server = TestServer::start(Reply::TooLarge);
+    let adapter = LocalHttpAdapter::new("local-http", server.port, "/huge");
+
+    let error = adapter.poll().unwrap_err();
+
+    assert!(error.contains("limit"), "message was: {error}");
+}
+
+#[test]
+fn the_http_adapter_reports_a_closed_port_without_panicking() {
+    // Port 1 on loopback: nothing is listening, and nothing should panic.
+    let adapter = LocalHttpAdapter::new("local-http", 1, "/nope")
+        .with_timeout(Duration::from_millis(200));
+
+    let error = adapter.poll().unwrap_err();
+    assert!(error.contains("local-http"), "message was: {error}");
+}
+
+#[test]
+fn the_http_adapter_stamps_its_own_name_as_the_source() {
+    let body = snapshot_json("demo", "task-1", "waiting");
+    let server = TestServer::start(Reply::Ok(body));
+    let snapshot = LocalHttpAdapter::new("my-http", server.port, "/api/harness/snapshot")
+        .poll()
+        .unwrap();
+
+    assert_eq!(snapshot.source.source_type, "adapter");
+    assert_eq!(snapshot.source.name.as_deref(), Some("my-http"));
+}
+
+/// A minimal in-memory adapter, so the manager can be tested without files.
+struct FakeAdapter {
+    name: String,
+    snapshot: HarnessSnapshot,
+}
+
+impl HarnessAdapter for FakeAdapter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn poll(&self) -> Result<HarnessSnapshot, super::protocol::ProtocolError> {
+        Ok(self.snapshot.clone())
+    }
+}
+
+/// An adapter that always fails, for failure-isolation tests.
+struct BrokenAdapter;
+
+impl HarnessAdapter for BrokenAdapter {
+    fn name(&self) -> &str {
+        "broken"
+    }
+
+    fn poll(&self) -> Result<HarnessSnapshot, super::protocol::ProtocolError> {
+        Err("this producer is deliberately unavailable".to_string())
+    }
+}
+
+#[test]
+fn a_configuration_file_round_trips_through_json() {
+    let text = r#"
+    {
+      "adapters": [
+        { "name": "mybot", "kind": "local-json", "path": "C:/tmp/mybot.json" },
+        { "name": "sidecar", "kind": "local-http", "port": 18001, "http_path": "/status",
+          "poll_interval_millis": 2000, "timeout_millis": 500 }
+      ]
+    }
+    "#;
+
+    let config = AdapterConfig::parse(text).unwrap();
+
+    assert_eq!(config.adapters.len(), 2);
+    assert!(config.adapters[0].enabled, "enabled defaults to true");
+    assert_eq!(config.adapters[0].kind, AdapterKind::LocalJson);
+    assert_eq!(config.adapters[1].kind, AdapterKind::LocalHttp);
+    assert_eq!(config.adapters[1].interval(), Duration::from_millis(2000));
+}
+
+#[test]
+fn an_empty_configuration_is_valid_and_runs_nothing() {
+    let config = AdapterConfig::parse(r#"{ "adapters": [] }"#).unwrap();
+
+    assert_eq!(config.adapters.len(), 0);
+    assert_eq!(config.enabled().count(), 0);
+}
+
+#[test]
+fn a_configuration_without_an_adapters_key_is_still_valid() {
+    // A file someone is halfway through writing should not break startup.
+    let config = AdapterConfig::parse("{}").unwrap();
+    assert!(config.adapters.is_empty());
+}
+
+#[test]
+fn a_disabled_adapter_is_not_started() {
+    let text = r#"
+    {
+      "adapters": [
+        { "name": "on", "kind": "local-json", "path": "C:/tmp/a.json" },
+        { "name": "off", "kind": "local-json", "path": "C:/tmp/b.json", "enabled": false }
+      ]
+    }
+    "#;
+
+    let config = AdapterConfig::parse(text).unwrap();
+    let enabled: Vec<&str> = config.enabled().map(|entry| entry.name.as_str()).collect();
+
+    assert_eq!(enabled, vec!["on"], "a disabled adapter never runs");
+}
+
+#[test]
+fn a_local_json_adapter_without_a_path_is_rejected() {
+    let text = r#"{ "adapters": [ { "name": "broken", "kind": "local-json" } ] }"#;
+
+    let error = AdapterConfig::parse(text).unwrap_err();
+    assert!(error.contains("local-json needs a path"), "message was: {error}");
+    assert!(error.contains("adapter 0"), "the report names which entry: {error}");
+}
+
+#[test]
+fn a_local_http_adapter_without_a_port_is_rejected() {
+    let text = r#"{ "adapters": [ { "name": "broken", "kind": "local-http" } ] }"#;
+
+    let error = AdapterConfig::parse(text).unwrap_err();
+    assert!(error.contains("local-http needs a port"), "message was: {error}");
+}
+
+#[test]
+fn an_unknown_adapter_kind_is_rejected() {
+    let text = r#"{ "adapters": [ { "name": "x", "kind": "telepathy", "port": 1 } ] }"#;
+
+    let error = AdapterConfig::parse(text).unwrap_err();
+    assert!(error.contains("telepathy") || error.contains("unknown variant"), "message was: {error}");
+}
+
+#[test]
+fn an_unknown_key_is_rejected_rather_than_ignored() {
+    // A typo would otherwise silently leave the field unset, which is worse
+    // than a startup line saying exactly what is wrong.
+    let text = r#"{ "adapters": [ { "name": "x", "kind": "local-json", "pth": "C:/tmp/a.json" } ] }"#;
+
+    let error = AdapterConfig::parse(text).unwrap_err();
+    assert!(error.contains("pth"), "message was: {error}");
+}
+
+#[test]
+fn two_adapters_cannot_share_a_name() {
+    let text = r#"
+    {
+      "adapters": [
+        { "name": "same", "kind": "local-json", "path": "C:/tmp/a.json" },
+        { "name": "same", "kind": "local-json", "path": "C:/tmp/b.json" }
+      ]
+    }
+    "#;
+
+    let error = AdapterConfig::parse(text).unwrap_err();
+    assert!(error.contains("both named"), "message was: {error}");
+}
+
+#[test]
+fn a_poll_interval_outside_the_allowed_range_is_rejected() {
+    let too_fast = r#"{ "adapters": [ { "name": "x", "kind": "local-json", "path": "C:/tmp/a.json", "poll_interval_millis": 1 } ] }"#;
+    let too_slow = r#"{ "adapters": [ { "name": "x", "kind": "local-json", "path": "C:/tmp/a.json", "poll_interval_millis": 99999999 } ] }"#;
+
+    assert!(AdapterConfig::parse(too_fast).unwrap_err().contains("poll_interval_millis"));
+    assert!(AdapterConfig::parse(too_slow).unwrap_err().contains("poll_interval_millis"));
+}
+
+#[test]
+fn too_many_adapters_are_rejected() {
+    let entries: Vec<String> = (0..MAX_ADAPTERS + 1)
+        .map(|index| format!(r#"{{ "name": "a{index}", "kind": "local-json", "path": "C:/tmp/{index}.json" }}"#))
+        .collect();
+    let text = format!(r#"{{ "adapters": [{}] }}"#, entries.join(", "));
+
+    let error = AdapterConfig::parse(&text).unwrap_err();
+    assert!(error.contains("the limit is"), "message was: {error}");
+}
+
+#[test]
+fn a_missing_configuration_file_means_no_adapters() {
+    let path = missing_file("no-config.json");
+
+    let config = super::manager::load_config(&path);
+
+    assert!(config.adapters.is_empty(), "a missing file is not an error");
+}
+
+#[test]
+fn a_malformed_configuration_file_treated_as_no_adapters() {
+    let path = temp_file("bad-config.json", "{ not json");
+
+    let config = super::manager::load_config(&path);
+
+    assert!(config.adapters.is_empty());
+}
+
+#[test]
+fn a_valid_configuration_file_loads_from_disk() {
+    let path = temp_file(
+        "good-config.json",
+        r#"{ "adapters": [ { "name": "file-one", "kind": "local-json", "path": "C:/tmp/a.json" } ] }"#,
+    );
+
+    let config = super::manager::load_config(&path);
+
+    assert_eq!(config.adapters.len(), 1);
+    assert_eq!(config.adapters[0].name, "file-one");
+}
+
+#[test]
+fn a_manager_with_no_adapters_is_idle() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let manager = AdapterManager::start(registry.clone(), &AdapterConfig::default());
+
+    assert_eq!(manager.state(), RunState::Idle);
+    assert_eq!(manager.state().adapters(), 0);
+    manager.stop();
+}
+
+#[test]
+fn a_disabled_adapter_leaves_the_registry_empty() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "off", "kind": "local-json", "path": "C:/tmp/a.json", "enabled": false } ] }"#,
+    )
+    .unwrap();
+
+    let manager = AdapterManager::start(registry.clone(), &config);
+    std::thread::sleep(Duration::from_millis(150));
+
+    assert_eq!(manager.state(), RunState::Idle);
+    assert!(registry.is_empty(), "a disabled adapter must never report");
+    manager.stop();
+}
+
+#[test]
+fn one_adapter_fills_the_registry() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let adapter = FakeAdapter {
+        name: "fake".to_string(),
+        snapshot: running_snapshot("harness-a"),
+    };
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // One turn of the loop body, without sleeping for an interval.
+    super::manager::poll_once_for_test(adapter, registry.clone(), stop);
+
+    assert_eq!(registry.len(), 1);
+    let active = registry.list_active_tasks();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].harness_id, "harness-a");
+}
+
+#[test]
+fn a_failing_adapter_leaves_a_good_snapshot_in_place() {
+    // The rule that matters: a producer going away must not erase what the note
+    // is showing. The staleness timeout is what retires it, not the failure.
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    super::manager::poll_once_for_test(
+        FakeAdapter {
+            name: "fake".to_string(),
+            snapshot: running_snapshot("harness-a"),
+        },
+        registry.clone(),
+        stop.clone(),
+    );
+    assert_eq!(registry.len(), 1);
+
+    super::manager::poll_once_for_test(BrokenAdapter, registry.clone(), stop);
+
+    assert_eq!(registry.len(), 1, "a failed poll never removes a harness");
+    assert_eq!(registry.list_active_tasks().len(), 1);
+    assert!(!registry.is_stale("harness-a"), "and it is still fresh");
+}
+
+#[test]
+fn a_failing_adapter_does_not_touch_another_adapters_snapshot() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    super::manager::poll_once_for_test(
+        FakeAdapter {
+            name: "good".to_string(),
+            snapshot: running_snapshot("harness-good"),
+        },
+        registry.clone(),
+        stop.clone(),
+    );
+
+    // A different adapter fails, repeatedly.
+    for _ in 0..3 {
+        super::manager::poll_once_for_test(BrokenAdapter, registry.clone(), stop.clone());
+    }
+
+    assert_eq!(registry.len(), 1);
+    assert_eq!(registry.list_active_tasks()[0].harness_id, "harness-good");
+}
+
+#[test]
+fn an_adapter_that_recovers_is_stored_again() {
+    // Failure is a state, not a verdict: the next successful poll is stored
+    // exactly like the first one was.
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    super::manager::poll_once_for_test(BrokenAdapter, registry.clone(), stop.clone());
+    assert!(registry.is_empty());
+
+    super::manager::poll_once_for_test(
+        FakeAdapter {
+            name: "recovered".to_string(),
+            snapshot: running_snapshot("harness-a"),
+        },
+        registry.clone(),
+        stop,
+    );
+
+    assert_eq!(registry.len(), 1);
+}
+
+#[test]
+fn a_snapshot_the_protocol_rejects_is_not_stored() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let mut broken = running_snapshot("harness-a");
+    broken.harness_name = String::new();
+
+    super::manager::poll_once_for_test(
+        FakeAdapter {
+            name: "bad-producer".to_string(),
+            snapshot: broken,
+        },
+        registry.clone(),
+        stop.clone(),
+    );
+
+    assert!(registry.is_empty(), "an invalid snapshot never reaches the registry");
+    assert!(!stop.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn stopping_the_manager_ends_every_adapter_thread() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "slow", "kind": "local-json", "path": "C:/tmp/nope.json", "poll_interval_millis": 60000 } ] }"#,
+    )
+    .unwrap();
+
+    let manager = AdapterManager::start(registry, &config);
+    assert_eq!(manager.state(), RunState::Running(1));
+
+    let started = std::time::Instant::now();
+    manager.stop();
+
+    // Stopping only flips a flag, so it cannot block; the adapters notice it
+    // within one 50 ms slice rather than one 60 s interval.
+    assert!(
+        started.elapsed() < Duration::from_millis(100),
+        "stop must not wait on a producer: took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn the_run_state_reports_what_is_running() {
+    assert_eq!(RunState::Idle.adapters(), 0);
+    assert_eq!(RunState::Running(3).adapters(), 3);
 }

@@ -225,25 +225,39 @@ pub struct ValidatedSnapshot {
 impl ValidatedSnapshot {
     /// Whether this snapshot has gone quiet for longer than `timeout`.
     ///
-    /// Staleness is judged from the newest timestamp we have: normally the
-    /// producer's `updated_at`, but never earlier than when we received it, so
-    /// a producer with a badly wrong clock cannot make a snapshot look stale
-    /// the moment it arrives.
+    /// Staleness is measured against **our own clock only**, from
+    /// `received_at`: the moment this process last accepted *new evidence* about
+    /// the harness. Nothing here compares the producer's clock with ours, so a
+    /// producer whose clock runs behind or ahead cannot make its task look
+    /// permanently alive or instantly dead.
+    ///
+    /// `received_at` is not simply "the last time we looked" - see
+    /// [`HarnessRegistry::upsert`](super::registry::HarnessRegistry::upsert),
+    /// which only moves it when the snapshot actually changed. Polling the same
+    /// unchanged document therefore ages, while a producer that keeps reporting
+    /// real progress stays live.
     pub fn is_stale(&self, now: u64, timeout: Duration) -> bool {
-        let fresh_enough = self.last_seen().max(self.received_at);
-        now.saturating_sub(fresh_enough) > timeout.as_millis() as u64
+        now.saturating_sub(self.received_at) > timeout.as_millis() as u64
     }
 
-    /// The newest timestamp this snapshot carries, ignoring `received_at`.
-    fn last_seen(&self) -> u64 {
-        let newest_task = self
-            .snapshot
-            .tasks
-            .iter()
-            .map(|task| task.updated_at)
-            .max()
-            .unwrap_or(0);
-        self.snapshot.updated_at.max(newest_task)
+    /// Whether this snapshot differs from `other` in a way that counts as new
+    /// evidence that its harness is alive.
+    ///
+    /// Compared on content, not on arrival: the same document read twice is one
+    /// heartbeat, not two. Any real change - a task appearing or finishing, a
+    /// status moving, a producer `updated_at` advancing - is new evidence.
+    ///
+    /// `source` is deliberately excluded. Which adapter or transport delivered
+    /// a snapshot says nothing about whether the harness it describes is still
+    /// running, so a re-labelled source must not be able to renew liveness.
+    pub fn differs_from(&self, other: &Self) -> bool {
+        let this = &self.snapshot;
+        let that = &other.snapshot;
+
+        this.harness_id != that.harness_id
+            || this.harness_name != that.harness_name
+            || this.updated_at != that.updated_at
+            || this.tasks != that.tasks
     }
 
     /// The snapshot's content as of `now`, for a consumer that does not care
