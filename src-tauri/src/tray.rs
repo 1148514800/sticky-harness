@@ -5,10 +5,12 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::harness_window;
 use crate::notes;
 
 const TRAY_ID: &str = "sticky-harness-tray";
 const MENU_ID_NEW_NOTE: &str = "new-note";
+const MENU_ID_HARNESS_TASKS: &str = "harness-tasks";
 const MENU_ID_SHOW_ALL: &str = "show-all-notes";
 const MENU_ID_HIDE_ALL: &str = "hide-all-notes";
 const MENU_ID_AUTOSTART: &str = "start-with-windows";
@@ -58,6 +60,11 @@ pub fn set_autostart(app: &AppHandle, enable: bool) -> bool {
 pub fn init(app: &AppHandle) -> Result<(), String> {
     let new_note_item = MenuItem::with_id(app, MENU_ID_NEW_NOTE, "New Note", true, None::<&str>)
         .map_err(|error| format!("could not build the tray \"New Note\" item: {error}"))?;
+    let harness_item =
+        MenuItem::with_id(app, MENU_ID_HARNESS_TASKS, "Harness Tasks", true, None::<&str>)
+            .map_err(|error| {
+                format!("could not build the tray \"Harness Tasks\" item: {error}")
+            })?;
     let show_item = MenuItem::with_id(app, MENU_ID_SHOW_ALL, "Show All Notes", true, None::<&str>)
         .map_err(|error| format!("could not build the tray \"Show All Notes\" item: {error}"))?;
     let hide_item = MenuItem::with_id(app, MENU_ID_HIDE_ALL, "Hide All Notes", true, None::<&str>)
@@ -86,6 +93,7 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
         app,
         &[
             &new_note_item,
+            &harness_item,
             &first_separator,
             &show_item,
             &hide_item,
@@ -112,6 +120,17 @@ pub fn init(app: &AppHandle) -> Result<(), String> {
                 // undone implicitly.
                 if let Err(error) = notes::create_and_open(app) {
                     eprintln!("[sticky-harness] tray \"New Note\" failed: {error}");
+                }
+            }
+            MENU_ID_HARNESS_TASKS => {
+                // One window at most: if it exists this shows and focuses it,
+                // and only the first click creates it.
+                match harness_window::open(app) {
+                    Ok(true) => println!("[sticky-harness] opened the harness tasks window"),
+                    Ok(false) => println!("[sticky-harness] focused the harness tasks window"),
+                    Err(error) => {
+                        eprintln!("[sticky-harness] tray \"Harness Tasks\" failed: {error}")
+                    }
                 }
             }
             MENU_ID_SHOW_ALL => match notes::show_all_notes(app) {

@@ -251,3 +251,96 @@ body {
   font-size: 12px;
   color: #b42318;
 }
+
+/* ---------------------------------------------------------------- Harness -- */
+
+/*
+ * The Harness Task Note uses the same shell as a note, so it reads as one more
+ * sticky note rather than a dashboard. Only the heading and task entries differ,
+ * and the density is slightly higher because this window is for glancing at.
+ */
+.harness__heading {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #3a4046;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.harness__groups,
+.harness__tasks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.harness__group {
+  padding: 6px 10px 8px;
+}
+
+/* A hairline between harnesses, so groups read as groups without boxes. */
+.harness__group + .harness__group {
+  border-top: 1px solid #f0f1f4;
+}
+
+.harness__harness {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4a5057;
+}
+
+.harness__task {
+  padding: 2px 0 2px 10px;
+}
+
+.harness__title {
+  margin: 0;
+  font-size: 13px;
+  color: #1f2328;
+  overflow-wrap: anywhere;
+}
+
+.harness__meta {
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+  margin: 1px 0 0;
+  font-size: 11.5px;
+  color: #6b7280;
+}
+
+.harness__status--running {
+  color: #1a7f37;
+}
+
+.harness__status--waiting {
+  color: #9a6700;
+}
+
+.harness__dot {
+  color: #c9ced6;
+}
+
+/* Tabular figures keep the second hand from shifting the line as it ticks. */
+.harness__elapsed {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The optional message sits below the status and must not compete with it. */
+.harness__message {
+  margin: 1px 0 0;
+  font-size: 11.5px;
+  color: #8a9099;
+  overflow-wrap: anywhere;
+}
+
+.harness__empty {
+  margin: 0;
+  padding: 14px 12px;
+  font-size: 12.5px;
+  color: #8a9099;
+}

@@ -749,6 +749,10 @@ fn open_note_windows(app: &AppHandle) -> Vec<WebviewWindow> {
 /// This only changes visibility: no note is created, no file is read or
 /// written, and no geometry, content or pin is touched. Bringing the windows
 /// forward is enough for the user to find them again.
+///
+/// The Harness Task Note is a floating window like any other, so it takes part
+/// in Show All too - but only if it already exists. Showing everything must not
+/// be a back door that creates it.
 pub fn show_all_notes(app: &AppHandle) -> Result<usize, String> {
     let mut shown = 0;
     for window in open_note_windows(app) {
@@ -756,6 +760,10 @@ pub fn show_all_notes(app: &AppHandle) -> Result<usize, String> {
             eprintln!("[sticky-harness] could not show a note window: {error}");
             continue;
         }
+        shown += 1;
+    }
+
+    if crate::harness_window::show_if_open(app) {
         shown += 1;
     }
 
@@ -778,6 +786,9 @@ pub fn show_all_notes(app: &AppHandle) -> Result<usize, String> {
 /// Hiding is deliberately session-only: nothing is written to disk, no note is
 /// deleted, and the windows keep their React state, so a later Show All returns
 /// exactly what was on screen. The tray stays alive, which is the whole point.
+///
+/// The Harness Task Note hides with the rest. It is not closed, its window
+/// config is untouched, and the harness registry keeps every snapshot.
 pub fn hide_all_notes(app: &AppHandle) -> Result<usize, String> {
     let mut hidden = 0;
     for window in open_note_windows(app) {
@@ -785,6 +796,10 @@ pub fn hide_all_notes(app: &AppHandle) -> Result<usize, String> {
             eprintln!("[sticky-harness] could not hide a note window: {error}");
             continue;
         }
+        hidden += 1;
+    }
+
+    if crate::harness_window::hide_if_open(app) {
         hidden += 1;
     }
 

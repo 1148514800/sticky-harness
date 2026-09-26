@@ -77,13 +77,28 @@ pub fn init() -> HarnessState {
     state
 }
 
-/// Every active harness task, for the Phase 5 note to render.
+/// Every active harness task, including ones from a harness that went quiet.
 ///
-/// Read-only on purpose: React observes harness state and never writes it, and
-/// a producer's only write path is the push endpoint.
+/// Kept because it is the honest "everything active" answer and the Phase 4
+/// checks use it. The note must not: it uses [`list_live_active_harness_tasks`],
+/// which also drops stale harnesses.
 #[tauri::command]
-pub async fn list_active_harness_tasks(state: State<'_, HarnessState>) -> Result<Vec<ActiveHarnessTask>, String> {
+pub async fn list_active_harness_tasks(
+    state: State<'_, HarnessState>,
+) -> Result<Vec<ActiveHarnessTask>, String> {
     Ok(state.registry().list_active_tasks())
+}
+
+/// Every active task from a harness that is still reporting.
+///
+/// This is what the Harness Task Note renders. Both rules - the task is active
+/// and the harness is not stale - are applied inside the registry, so the UI
+/// never computes staleness or filters snapshots itself.
+#[tauri::command]
+pub async fn list_live_active_harness_tasks(
+    state: State<'_, HarnessState>,
+) -> Result<Vec<ActiveHarnessTask>, String> {
+    Ok(state.registry().list_live_active_tasks())
 }
 
 /// Every stored snapshot, for diagnostics and for the runtime checks.

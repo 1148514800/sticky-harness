@@ -13,8 +13,8 @@ use std::time::Duration;
 use serde::Serialize;
 
 use super::protocol::{
-    now_millis, HarnessSnapshot, HarnessStatus, ProtocolError, ValidatedSnapshot,
-    DEFAULT_STALE_TIMEOUT_MILLIS,
+    now_millis, stale_timeout_millis, HarnessSnapshot, HarnessStatus, ProtocolError,
+    ValidatedSnapshot,
 };
 
 
@@ -46,7 +46,7 @@ pub struct HarnessRegistry {
 
 impl Default for HarnessRegistry {
     fn default() -> Self {
-        Self::with_stale_timeout(Duration::from_millis(DEFAULT_STALE_TIMEOUT_MILLIS))
+        Self::with_stale_timeout(Duration::from_millis(stale_timeout_millis()))
     }
 }
 
@@ -110,16 +110,44 @@ impl HarnessRegistry {
 
     /// Every task that is currently work in progress, across all harnesses.
     ///
-    /// This is the whole contract Phase 5 needs: the note asks for active tasks
-    /// and never scans or filters the registry itself, so the meaning of
-    /// "active" stays in [`HarnessStatus::is_active`].
+    /// Active means [`HarnessStatus::is_active`] and nothing else. This does not
+    /// consider staleness - a harness that stopped reporting still counts here -
+    /// so a UI should use [`Self::list_live_active_tasks`] instead.
     ///
     /// Ordered by harness id, then start time, then task id, so a repeated call
     /// with unchanged state returns an unchanged list.
     pub fn list_active_tasks(&self) -> Vec<ActiveHarnessTask> {
+        self.collect_active(now_millis(), None)
+    }
+
+    /// Every active task that is also being reported by a harness that is still
+    /// live, judged as of `now`.
+    ///
+    /// Two rules, applied in one place so a UI never has to combine them:
+    /// the task must be active, and the harness that reported it must not have
+    /// gone quiet. A stale harness is skipped whole, because its tasks are as
+    /// old as the snapshot that carried them.
+    ///
+    /// Nothing is removed or mutated here. A stale harness stays in the registry
+    /// and reappears the moment it reports again.
+    pub fn list_live_active_tasks(&self) -> Vec<ActiveHarnessTask> {
+        self.collect_active(now_millis(), Some(self.stale_timeout))
+    }
+
+    /// The shared body of both active-task listings.
+    ///
+    /// `stale_timeout` is `None` for "do not consider staleness", which keeps
+    /// the two public methods from drifting apart.
+    fn collect_active(&self, now: u64, stale_timeout: Option<Duration>) -> Vec<ActiveHarnessTask> {
         let mut active = Vec::new();
 
         for stored in self.list() {
+            if let Some(timeout) = stale_timeout {
+                if stored.is_stale(now, timeout) {
+                    continue;
+                }
+            }
+
             for task in &stored.snapshot.tasks {
                 if !task.is_active() {
                     continue;

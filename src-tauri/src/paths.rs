@@ -33,3 +33,13 @@ pub fn notes_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
     Ok(dir)
 }
+
+/// Resolve `<app data>/harness-task-window.json`.
+///
+/// The Harness Task Note is not a normal note, so its window config lives
+/// beside `notes/` rather than inside it. The file name comes from here for the
+/// same reason every other app data path does: one module decides where data
+/// lives.
+pub fn harness_task_window_config(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(ensure_app_data_dir(app)?.join("harness-task-window.json"))
+}

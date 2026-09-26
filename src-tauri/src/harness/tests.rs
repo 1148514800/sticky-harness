@@ -462,6 +462,166 @@ fn a_harness_can_be_removed_explicitly() {
     assert!(registry.is_empty());
 }
 
+/// A snapshot whose producer clock is far in the past, so staleness can be
+/// judged without waiting for a real timeout.
+fn stale_snapshot(harness_id: &str) -> HarnessSnapshot {
+    let mut snapshot = running_snapshot(harness_id);
+    snapshot.updated_at = 1;
+    snapshot.tasks[0].started_at = 1;
+    snapshot.tasks[0].updated_at = 1;
+    snapshot
+}
+
+#[test]
+fn live_active_tasks_match_active_tasks_when_nothing_is_stale() {
+    let registry = HarnessRegistry::default();
+    let now = super::protocol::now_millis();
+    let mut snapshot = running_snapshot("harness-a");
+    snapshot.updated_at = now;
+    snapshot.tasks[0].started_at = now;
+    snapshot.tasks[0].updated_at = now;
+    registry.upsert(snapshot).unwrap();
+
+    assert_eq!(registry.list_live_active_tasks(), registry.list_active_tasks());
+}
+
+#[test]
+fn an_empty_registry_has_no_live_active_tasks() {
+    let registry = HarnessRegistry::default();
+
+    assert!(registry.list_live_active_tasks().is_empty());
+}
+
+/// Store a snapshot as if it had arrived long enough ago to have gone quiet.
+///
+/// `received_at` is the floor that stops a bad producer clock from making a
+/// fresh snapshot look dead, so a test that wants real staleness has to age the
+/// arrival too - exactly what a long-running app would have done. This is the
+/// "inject now" the stale checks are supposed to use, instead of sleeping.
+fn store_aged(registry: &HarnessRegistry, snapshot: HarnessSnapshot) {
+    let mut stored = registry.upsert(snapshot).unwrap();
+    stored.received_at = 1;
+    registry.store(stored);
+}
+
+#[test]
+fn a_just_received_snapshot_is_never_live_stale() {
+    // Even with a zero timeout, a snapshot cannot be stale the instant it
+    // arrives: this is the received_at floor, restated for the live view.
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_millis(0));
+    registry.upsert(stale_snapshot("harness-a")).unwrap();
+
+    assert_eq!(registry.list_live_active_tasks().len(), 1);
+}
+
+#[test]
+fn a_stale_harness_is_excluded_from_live_active_tasks_but_kept() {
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_millis(0));
+    store_aged(&registry, stale_snapshot("harness-a"));
+
+    // The snapshot is genuinely stale, and is still in the registry...
+    assert!(registry.is_stale("harness-a"));
+    assert_eq!(registry.len(), 1, "the snapshot itself is never removed");
+    assert_eq!(
+        registry.get("harness-a").unwrap().snapshot.tasks.len(),
+        1,
+        "its tasks are never mutated"
+    );
+    assert_eq!(
+        registry.list_active_tasks().len(),
+        1,
+        "the plain active list ignores staleness"
+    );
+
+    // ...but the live view drops it, because that task is not being reported
+    // by anything that is still running.
+    assert!(
+        registry.list_live_active_tasks().is_empty(),
+        "a stale harness must not look like a running task"
+    );
+}
+
+#[test]
+fn staleness_excludes_the_whole_harness_not_just_one_task() {
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_millis(0));
+    let mut snapshot = stale_snapshot("harness-a");
+    snapshot.tasks = vec![
+        started("task-1", "First", HarnessStatus::Running, 1),
+        started("task-2", "Second", HarnessStatus::Waiting, 2),
+    ];
+    store_aged(&registry, snapshot);
+
+    assert_eq!(registry.list_active_tasks().len(), 2);
+    assert!(registry.list_live_active_tasks().is_empty());
+}
+
+#[test]
+fn a_fresh_harness_still_shows_while_another_is_stale() {
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_secs(300));
+    let now = super::protocol::now_millis();
+
+    // Fresh: judged from its own recent timestamps.
+    let mut fresh = running_snapshot("harness-fresh");
+    fresh.updated_at = now;
+    fresh.tasks[0].started_at = now;
+    fresh.tasks[0].updated_at = now;
+    registry.upsert(fresh).unwrap();
+
+    // Stale: old producer timestamps, aged arrival, so the received_at floor
+    // does not mask it.
+    store_aged(&registry, stale_snapshot("harness-stale"));
+
+    let live: Vec<String> = registry
+        .list_live_active_tasks()
+        .into_iter()
+        .map(|task| task.harness_id)
+        .collect();
+
+    assert_eq!(live, vec!["harness-fresh"]);
+    assert_eq!(registry.list_active_tasks().len(), 2);
+}
+
+#[test]
+fn live_active_tasks_keep_the_core_ordering() {
+    let registry = HarnessRegistry::default();
+    let now = super::protocol::now_millis();
+
+    for harness_id in ["harness-b", "harness-a"] {
+        let mut snapshot = running_snapshot(harness_id);
+        snapshot.updated_at = now;
+        snapshot.tasks[0].started_at = now;
+        snapshot.tasks[0].updated_at = now;
+        registry.upsert(snapshot).unwrap();
+    }
+
+    let ids: Vec<String> = registry
+        .list_live_active_tasks()
+        .into_iter()
+        .map(|task| task.harness_id)
+        .collect();
+
+    assert_eq!(ids, vec!["harness-a", "harness-b"]);
+}
+
+#[test]
+fn a_harness_that_reports_again_becomes_live_once_more() {
+    let registry = HarnessRegistry::with_stale_timeout(Duration::from_millis(0));
+    store_aged(&registry, stale_snapshot("harness-a"));
+    assert!(registry.is_stale("harness-a"));
+    assert!(registry.list_live_active_tasks().is_empty());
+
+    // A stale harness that comes back is simply a harness reporting again; the
+    // live view picks it up with no special handling.
+    let mut revived = running_snapshot("harness-a");
+    let now = super::protocol::now_millis();
+    revived.updated_at = now;
+    revived.tasks[0].started_at = now;
+    revived.tasks[0].updated_at = now;
+    registry.upsert(revived).unwrap();
+
+    assert_eq!(registry.list_live_active_tasks().len(), 1);
+}
+
 #[test]
 fn local_json_text_parses_into_a_validated_snapshot() {
     let text = r#"

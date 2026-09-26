@@ -7,13 +7,21 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 5 — Harness Task Note (Completed)**
+
+A read-only "Harness Tasks" window shows what the local harness protocol
+currently has running. It polls the registry once a second and lists live
+active tasks grouped by harness, with the harness name, task title, status and
+elapsed time. It is not a Markdown note: it has no editor, is never saved as a
+note file, and its window position, size and Pin live in their own settings
+file. See **Harness Tasks Window** below.
+
 **Phase 4 — Harness Protocol (Completed)**
 
 There is a small local protocol for reporting what an AI harness is running.
 It is vendor-neutral: it knows nothing about Codex, DeepSeek or any other
 harness, so an adapter for a real one goes in front of the protocol later
-rather than inside it. Only the protocol and its in-memory state exist so far;
-the note that displays it is Phase 5.
+rather than inside it.
 
 **Phase 3 — Desktop Experience (Completed)**
 
@@ -26,8 +34,9 @@ The tray is the app's desktop surface:
 | Tray item | What it does |
 | --- | --- |
 | New Note | Creates and opens another note |
-| Show All Notes | Reveals every note window that is hidden |
-| Hide All Notes | Hides every note window without closing it |
+| Harness Tasks | Opens the Harness Task Note, or focuses it if it is already open |
+| Show All Notes | Reveals every window that is hidden, notes and the Harness Task Note alike |
+| Hide All Notes | Hides every window without closing it |
 | Start with Windows | Ticks or unticks starting the app when you sign in |
 | Exit | Quits the app and keeps every note |
 
@@ -159,6 +168,15 @@ currently on Windows:
    └─ <note-id>.json
 ```
 
+The Harness Task Note keeps its window state in its own file next to that
+directory, not inside it, because it is not a note:
+
+```text
+%APPDATA%\com.stickyharness.desktop\
+├─ notes\                     # one JSON file per note (user content)
+└─ harness-task-window.json    # position, size and Pin only; no task data
+```
+
 `src-tauri/src/paths.rs` is the only module that decides this location. Never
 hardcode a path or place user data in the project directory.
 
@@ -179,6 +197,9 @@ hardcode a path or place user data in the project directory.
   notes again.
 - **New Note does not reveal hidden notes.** Hiding is only undone by Show All
   Notes, so a note you hid stays hidden even while you create a new one.
+- **The Harness Task Note is not a note.** Closing it with `X` hides it instead
+  of deleting anything, because nothing in it is user content. There is only
+  ever one, and it never appears in the `notes` directory.
 - **Start with Windows is the real thing.** It writes the same Windows
   autostart entry the OS itself uses, through the official Tauri plugin; the
   tick is read back from the OS, so it is still correct if the entry was changed
@@ -242,14 +263,39 @@ adding another. Invalid payloads are rejected with a `4xx` and a readable reason
 and never reach the stored state. If the port is already in use, the app logs it
 and keeps working; notes and the tray are unaffected.
 
+## Harness Tasks Window
+
+The **Harness Tasks** window answers one question: what is running right now.
+
+Open it from the tray with **Harness Tasks**. It is a single window — asking for
+it again shows and focuses the same one rather than creating a second. Closing
+it with `X` only hides it; the tray item brings it back.
+
+It shows live active tasks only: tasks whose status is `running` or `waiting`
+and whose harness has reported in recently. A harness that stops reporting goes
+stale, and its tasks drop out of the window without being deleted — the snapshot
+is still there, and the next report brings them straight back. Tasks are grouped
+under their harness name in the order the harnesses first reported, oldest task
+first, so rows do not jump around between refreshes.
+
+The list refreshes once a second, which is plenty for a status view; elapsed
+times are computed from `started_at` in the window itself. Each row shows the
+task title, its status and its elapsed time, plus a short `message` when the
+harness sent one. Nothing else is displayed — no ids, no logs, no tool calls.
+
+Harness state comes from the localhost protocol above, so the window is empty
+until something reports in. The registry is in-memory only: **after an app
+restart the window is restored (position, size and Pin intact) but the list
+starts empty** until a harness POSTs again.
+
 ## Roadmap
 
 - Phase 1 — Normal sticky notes ✅
 - Phase 2 — Markdown / Todo ✅
 - Phase 3 — Desktop experience ✅
 - Phase 4 — Harness Protocol ✅
-- Phase 5 — Harness Task Note
+- Phase 5 — Harness Task Note ✅
 - Phase 6 — Harness Adapters
 
-Phases 1 to 4 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 5 are implemented, and nothing is pushed anywhere. See
 `AI_HANDOFF.md` for the detailed current state and the next step.

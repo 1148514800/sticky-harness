@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { NoteRecord } from "../types/desktop";
+import type { ActiveHarnessTask, HarnessWindowStatus, NoteRecord } from "../types/desktop";
 
 /**
  * Thin wrapper around the Rust note commands.
@@ -65,4 +65,24 @@ export async function openExternalUrl(url: string): Promise<void> {
     const reason = typeof error === "string" ? error : String(error);
     throw new Error(`open_url failed: ${reason}`);
   }
+}
+
+/**
+ * Every active task from a harness that is still reporting.
+ *
+ * The Rust registry applies both rules - the task is active and its harness is
+ * not stale - so the UI never inspects snapshots or decides what stale means.
+ */
+export async function listLiveActiveHarnessTasks(): Promise<ActiveHarnessTask[]> {
+  return callCommand<ActiveHarnessTask[]>("list_live_active_harness_tasks");
+}
+
+/** Whether the Harness Task Note exists, is visible, and is pinned. */
+export async function getHarnessWindowStatus(): Promise<HarnessWindowStatus> {
+  return callCommand<HarnessWindowStatus>("harness_window_status");
+}
+
+/** Pin or unpin the Harness Task Note, stored in its own window config. */
+export async function setHarnessWindowPinned(pinned: boolean): Promise<void> {
+  return callCommand<void>("set_harness_window_pinned", { pinned });
 }

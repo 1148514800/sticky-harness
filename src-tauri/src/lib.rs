@@ -1,4 +1,5 @@
 mod harness;
+mod harness_window;
 mod notes;
 mod paths;
 mod tray;
@@ -29,7 +30,10 @@ pub fn run() {
             notes::show_notes,
             notes::hide_notes,
             harness::list_active_harness_tasks,
+            harness::list_live_active_harness_tasks,
             harness::list_harness_snapshots,
+            harness_window::harness_window_status,
+            harness_window::set_harness_window_pinned,
             harness::harness_api_port,
             harness::harness_is_stale,
         ])
@@ -60,6 +64,16 @@ pub fn run() {
                 match notes::restore(&handle) {
                     Ok(count) => println!("[sticky-harness] restored {count} note window(s)"),
                     Err(error) => eprintln!("[sticky-harness] could not restore notes: {error}"),
+                }
+
+                // The Harness Task Note restores separately: it is not a note,
+                // and it only comes back if the user ever opened it.
+                match harness_window::restore(&handle) {
+                    Ok(true) => println!("[sticky-harness] restored the harness tasks window"),
+                    Ok(false) => {}
+                    Err(error) => eprintln!(
+                        "[sticky-harness] could not restore the harness tasks window: {error}"
+                    ),
                 }
             });
 

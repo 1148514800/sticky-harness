@@ -47,6 +47,36 @@ pub const MAX_LABEL_CHARS: usize = 512;
 /// stops looking active before the user notices it on the note.
 pub const DEFAULT_STALE_TIMEOUT_MILLIS: u64 = 5 * 60 * 1000;
 
+/// The staleness timeout the app actually uses.
+///
+/// `STICKY_HARNESS_STALE_TIMEOUT_MS` overrides the default at compile time, so
+/// the staleness behaviour can be observed in a real running app - the note
+/// dropping a quiet harness while the registry keeps it - without waiting the
+/// full five minutes. It is unset in a normal build, and the default is what
+/// ships.
+pub const fn stale_timeout_millis() -> u64 {
+    match option_env!("STICKY_HARNESS_STALE_TIMEOUT_MS") {
+        Some(raw) => parse_u64(raw),
+        None => DEFAULT_STALE_TIMEOUT_MILLIS,
+    }
+}
+
+/// A tiny const parser, because `const` cannot call `str::parse`.
+const fn parse_u64(raw: &str) -> u64 {
+    let bytes = raw.as_bytes();
+    let mut value: u64 = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        let digit = bytes[index];
+        if digit < b'0' || digit > b'9' {
+            return DEFAULT_STALE_TIMEOUT_MILLIS;
+        }
+        value = value * 10 + (digit - b'0') as u64;
+        index += 1;
+    }
+    value
+}
+
 /// The status of one harness task.
 ///
 /// Deliberately small. `Unknown` exists for one reason only: a future adapter

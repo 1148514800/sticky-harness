@@ -120,13 +120,51 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 4 — Harness Protocol
+Phase 5 — Harness Task Note
 
 Status: Completed
 
 Done:
 
 - Phase 1 sticky notes, Phase 2 Markdown editing, Phase 3 desktop experience.
+- A read-only Harness Task Note in its own window (label `harness-tasks`,
+  title Harness Tasks), opened from Tray -> Harness Tasks.
+- Two note types stay separate. A normal note is user content: Markdown, one
+  JSON file, `X` deletes it. The Harness Task Note is a status view over
+  `HarnessRegistry`: no editor, no note file, and `X` hides it.
+- `HarnessRegistry::list_live_active_tasks()` is the single source of truth for
+  "what is running": active status *and* snapshot not stale. Both
+  `list_active_tasks()` and the live variant share one private collector, so
+  the active rule stays in one place and React never re-derives staleness.
+- Stale exclusion hides, it never deletes. A harness that goes quiet drops out
+  of the window while its snapshot stays in the registry, and the next report
+  brings it back with no mutation in between.
+- Window state is persisted separately from notes:
+  `<AppData>/harness-task-window.json` holds `created`, `x`, `y`,
+  `width`, `height` and `always_on_top` - and no task data.
+- Tray -> Harness Tasks is show/focus/create-once: an existing window is shown
+  and focused, and only a missing one is created.
+- Show All Notes and Hide All Notes now cover the Harness Task Note as well as
+  notes. Hiding closes nothing, deletes nothing and leaves the registry alone;
+  Show All never creates the window if it was never opened.
+- The list polls `list_live_active_harness_tasks` once a second and redraws
+  elapsed times from `started_at` on a local clock tick, so durations do not
+  need a second request.
+
+Not done (intentionally, do not start without a new task):
+
+- Any real harness integration. No Codex, no DeepSeek, no adapter for either.
+- Task history, completed-task lists, logs, tool calls, a terminal view,
+  search, settings, notifications, SQLite, cloud, authentication, WebSocket
+  and SSE. Polling a registry in the same process is enough.
+- Phase 4's protocol is untouched apart from one addition: a compile-time
+  stale-timeout override used to observe stale exclusion in a real run (see
+  Known Issues).
+
+## 4b. Phase 4 — Harness Protocol (Completed)
+
+Done:
+
 - A vendor-neutral protocol for "what is this harness running":
   `HarnessSnapshot` / `HarnessTask` / `HarnessStatus`, defined in
   `harness/protocol.rs` with no reference to any real harness.
@@ -148,18 +186,15 @@ Done:
 - The registry is deliberately not persisted. Harness state describes live
   processes, so an empty registry after a restart is the truth.
 
-Not done (intentionally, do not start without a new task):
-
-- Any real harness integration. No Codex, no DeepSeek, no adapter for either.
-- The Harness Task Note UI (that is Phase 5).
-- Task history, SQLite, log or tool-call viewers, settings screen,
-  authentication, cloud, WebSocket and SSE. Snapshots are enough.
-
 ## 5. Important Files
 
 ```
 src/App.tsx                           Picks the view from this window label
 src/windows/NoteWindow.tsx            One note: + button, Pin, autosave
+src/windows/HarnessTaskWindow.tsx     Read-only task view, polls once a second
+src/components/HarnessTaskList.tsx    Renders harness groups, tasks, empty state
+src/harness/elapsed.ts                MM:SS / H:MM:SS elapsed formatting
+src/harness/grouping.ts               Groups live tasks by harness, Core order
 src/components/NoteEditor.tsx         WYSIWYG Markdown editor for one note
 src/editor/markdown.ts                 Markdown <-> editor document conversion
 src/editor/todoInput.ts                Turns a typed `- [ ] ` into a checkbox
@@ -173,13 +208,14 @@ src-tauri/src/lib.rs                  Setup, command registration, exit veto
 src-tauri/src/notes.rs                Note identity, persistence, window lifecycle
 src-tauri/src/tray.rs                 Tray icon, menu, autostart checkbox
 src-tauri/src/paths.rs                Sole owner of the local data directory
+src-tauri/src/harness_window.rs       The Harness Task Note window and its state
 src-tauri/src/harness/mod.rs          Harness wiring, Tauri commands, init
 src-tauri/src/harness/protocol.rs     The protocol model, status enum, constants
 src-tauri/src/harness/registry.rs     In-memory snapshots and active filtering
 src-tauri/src/harness/server.rs       Loopback-only push endpoint
 src-tauri/src/harness/adapter.rs      Pull seam + reference local-JSON adapter
 src-tauri/src/harness/tests.rs        Core tests (validation, registry, stale)
-src-tauri/capabilities/default.json   Core permissions for note-* windows
+src-tauri/capabilities/default.json   Core permissions for note-* and harness-tasks
 src-tauri/tauri.conf.json             No startup window; notes created by Rust
 ```
 
@@ -212,12 +248,25 @@ src-tauri/tauri.conf.json             No startup window; notes created by Rust
   already there.
 - A note can be resized down to 220x160; the toolbar stays usable and the note
   body keeps most of the height.
+- The Harness Task Note opens from Tray -> Harness Tasks, shows only live active
+  tasks grouped by harness, and refreshes once a second. Closing it with X
+  hides it; the tray item focuses the same window again rather than creating a
+  second one.
+- Show All and Hide All cover the Harness Task Note too. Hiding it deletes
+  nothing and changes no registry state; showing it never creates it if it was
+  never opened.
 - Tray Exit quits the process and keeps every note file, including notes that
   were hidden.
 - A local harness can POST its current state to
   `http://127.0.0.1:17899/api/harness/snapshot` and the app remembers it in
   memory; `GET /api/harness/snapshots` reads it back. Nothing about this is
   persisted, and nothing is shown in the UI yet.
+- A task stops being listed when its harness goes quiet for longer than the
+  stale timeout (5 minutes by default). The snapshot is not deleted, so the next
+  report restores the row.
+- The Harness Task Note window keeps its own position, size and Pin in
+  `harness-task-window.json`, which is not a note file and never contains task
+  data. After a restart the window comes back the same and the list is empty.
 - If the harness port is already taken, the app logs the failure and starts
   anyway: notes and the tray are unaffected.
 - A corrupt or hand-edited note file is logged and skipped without stopping the
@@ -253,6 +302,19 @@ npm test                  PASS  67 tests (3 files)
 npm run typecheck         PASS
 npm run build             PASS  (same pre-existing chunk-size warning)
 cargo test                PASS  39 tests (validation, registry, staleness)
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
+```
+
+Re-run for Phase 5, which adds the Harness Task Note, its window module and its
+frontend helpers:
+
+```
+npm test                  PASS  85 tests (5 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo test                PASS  52 tests (validation, registry, staleness,
+                                harness window config)
 cargo check --all-targets PASS  (no warnings)
 cargo build               PASS
 ```
@@ -376,15 +438,74 @@ G  Notes regression    PASS  with the API up: tray New Note, `+`, Markdown
                              (192.168.0.104) could not reach it
 ```
 
+Phase 5 (Harness Task Note), run against a live build. Harness state was pushed
+from temporary scripts outside the repo; the stale run used a 4-second timeout
+through the compile-time override so a real stale window could be observed
+without waiting five minutes. That override was removed from the launcher
+afterwards, so the shipping default is still 5 minutes:
+
+```
+Tray menu              PASS  9 rows: New Note / Harness Tasks / separator /
+                             Show All Notes / Hide All Notes / separator /
+                             Start with Windows / separator / Exit
+A  Empty registry      PASS  with nothing reported, Tray -> Harness Tasks created
+                             one window (label harness-tasks, 378x467) showing
+                             the heading and "No running tasks"; no window was
+                             created before the click
+B  One running task    PASS  POST Harness A / Task A / running appeared within
+                             1.5 s as "Harness A -> Task A -> Running", elapsed
+                             08:19 computed from started_at
+C  Re-push same id     PASS  task-a completed + task-b running arrived as one
+                             harness with only Task B listed; no completed
+                             history, still a single harness
+D  Waiting + message   PASS  a waiting task rendered as "Waiting" with its
+                             message shown at low visual weight
+E  Two harnesses       PASS  Harness A (2 tasks) and Harness B (1 task) grouped
+                             separately, tasks oldest-first, order stable
+                             across refreshes
+F  Stale exclusion     PASS  with a 4 s timeout: a running task passed the
+                             timeout and left the window ("No running tasks")
+                             while GET /api/harness/snapshots still returned it
+                             byte for byte; a fresh POST brought it back. The
+                             snapshot was never deleted or mutated
+G  X then reopen       PASS  X hid the window (same HWND, still present), the
+                             harness API stayed up (GET /health ok) and the
+                             registry was intact; Tray -> Harness Tasks restored
+                             the same window with its tasks listed, and no
+                             second harness-tasks label ever appeared
+H  Restart             PASS  after a restart the window returned at its saved
+                             375,250 557x603 with Pin still on, the registry was
+                             empty ("No running tasks"), and a new POST showed
+                             the task again in 2.6 s
+I  Show / Hide All     PASS  Harness Task Note + 2 notes: Hide All returned 3 and
+                             left 0 visible windows with the tray alive and
+                             GET /health still reporting 3 active tasks; Show
+                             All returned all 3 windows with note files and
+                             registry unchanged
+J  Note regression     PASS  tray New Note, `+`, Markdown heading and
+                             lists round-tripping to disk, a real todo checkbox
+                             click flipping and persisting, Pin persisting,
+                             resize persisting (525x475), Hide All / Show All,
+                             and Tray Exit quitting cleanly
+   listener permission PASS  before the capability fix the harness window logged
+                             "event.listen not allowed on window harness-tasks";
+                             after granting core:event:allow-listen the console
+                             is clean and the focus refresh works
+```
+
 ## 8. Known Issues
 
 - **Capabilities the frontend needs must be granted explicitly.**
   `core:window:allow-destroy` is what lets a closing note window actually
   finish closing; without it the X button deleted the JSON and left the window
   on screen. `core:window:allow-set-size` is granted for the same reason, so
-  the note can be resized to its documented 220x160 floor. `core:window:default`
-  contains neither, which is worth remembering before adding the next window
-  API call.
+  the note can be resized to its documented 220x160 floor. Phase 5 hit the same
+  trap from the other side: the default capability only listed `note-*`, so
+  `event.listen` was denied for `harness-tasks` and the whole poll effect
+  aborted before it ever loaded a task. The window looked permanently empty
+  while the registry held the data. `core:window:default` contains neither
+  permission, and a new window label must be added to the capability before any
+  of its APIs work.
 - **An `os error 32` read race was observed once during runtime verification,**
   but repeated `create -> immediate get_note` checks could not reproduce it.
   Fifteen serial runs (6 + 10) of create-then-read all succeeded. Persistence
@@ -409,11 +530,26 @@ G  Notes regression    PASS  with the API up: tray New Note, `+`, Markdown
   slightly older read-modify-write win, which is invisible in practice because
   the next move rewrites it. Revisit only if geometry drift is ever reported.
 - **The harness registry is intentionally not persisted and not pruned.** State
-  is dropped on exit, so a note opened after a restart shows nothing until a
-  harness reports again. Staleness is computed but never acted on, so a harness
-  that dies mid-task keeps showing its task as active until it reports or the
-  app restarts. Both are deliberate for this phase; deciding what to *do* about
-  a stale harness needs a task of its own.
+  is dropped on exit, so the Harness Task Note opens empty after a restart until
+  a harness reports again. Staleness now hides a task from the note, but the
+  snapshot is never deleted or mutated: the decision what to *do* with a stale
+  harness beyond hiding it (prune, mark it, ask it) still needs a task of its
+  own.
+- **The stale timeout can be overridden at compile time.** `protocol.rs` reads
+  `STICKY_HARNESS_STALE_TIMEOUT_MS` with `option_env!` and falls back to the
+  5-minute default, so a real stale window can be observed in a few seconds
+  during verification without changing shipping behaviour. It defaults to the
+  documented value when unset, which is the only configuration the app ships.
+- **The Harness Task Note refreshes on a timer, not on an event.** Hidden
+  windows keep polling once a second, which costs almost nothing and keeps the
+  code simple, and picking the window up refreshes it immediately. A hidden
+  window can therefore be up to one second behind when it reappears.
+- **The task list shows whatever the registry has, with no history.** A task
+  that completes simply disappears on the next poll; there is no completed list
+  and no notification, which is deliberate for a status surface.
+- **Elapsed time is computed from `started_at` in the UI.** A producer that
+  reports a wrong or future `started_at` will show a wrong duration; negative
+  values are clamped to `00:00`.
 - **The push endpoint has no authentication.** It is bound to loopback only and
   sends no CORS header, so a local process can post harness state and a web page
   cannot read it cross-origin. That is the intended boundary for local IPC; it
@@ -431,31 +567,37 @@ G  Notes regression    PASS  with the API up: tray New Note, `+`, Markdown
 
 ## 9. Next Step
 
-Next: Phase 5 — Harness Task Note
+Next: Phase 6 — Harness Adapters
 
-Direction only, do not start without a new task. Phase 4 built the protocol and
-the state; Phase 5 is the note that shows it, and nothing here should be
-implemented early.
+Direction only, do not start without a new task.
 
-The contract Phase 5 should be built on already exists:
+Phases 1-5 gave the app its own state: a protocol for harness reports, a
+registry that holds them, and a window that shows what is running. Nothing
+produces those reports yet, so the window only fills when something POSTs to
+`http://127.0.0.1:17899/api/harness/snapshot` by hand.
 
-- Read state through `list_active_harness_tasks` (Tauri command) or
-  `HarnessRegistry::list_active_tasks`. Do not scan or filter the registry from
-  React, and do not re-implement the active rule: ask
-  `HarnessStatus::is_active()`.
-- `ActiveHarnessTask` is the view model: harness id and name, task id and title,
-  status, started_at, updated_at and an optional short message. Keep it to that.
-- Compute elapsed time in the UI from `now - started_at`; the protocol never
-  carries a rendered duration.
-- The Harness Task Note stays a separate concept from a normal sticky note. It
-  is not a note file and must not go through the note JSON format.
+Phase 6 is the other half of that: producers.
 
-Constraints that already hold and must survive Phase 5:
+- Adapters report *into* the existing protocol. `HarnessSnapshot` and
+  `HarnessStatus` are already the contract; do not change the model to fit a
+  particular tool.
+- `harness/adapter.rs` already holds the reference local-JSON adapter and the
+  pull seam. Read it before adding a second adapter, and follow its shape.
+- One adapter per harness, each with its own id and name, so several can report
+  at once and the existing grouping keeps working unchanged.
+- Mapping a producer's real states onto `running` / `waiting` / `failed` /
+  `completed` / `cancelled` is the hard part. If a state cannot be mapped
+  honestly, report `unknown` rather than guessing.
+- The Harness Task Note must not need changes: it reads
+  `list_live_active_harness_tasks`, so an adapter that reports well shows up on
+  its own.
 
-- `notes.rs` stays the only owner of note persistence, and `create_and_open`
-  stays the only way a note window comes into being.
-- No task history, no SQLite, no log or tool-call viewer, no settings screen.
-- Everything stays local: no account, no sync, no server.
+Anything Phase 6 should not become:
+
+- No task history, no log or tool-call viewer, no terminal, no settings screen,
+  no notifications, no SQLite, no cloud, no authentication, no WebSocket or SSE.
+- No adapter may write into `notes/` or into note JSON. Note content stays
+  user content.
 
 ## 10. Latest Commit
 
@@ -463,15 +605,21 @@ Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
 `main`). Local commits only; nothing has been pushed.
 
 ```
+cd92869 docs: record the Phase 4 commit in the handoff
 eeb5353 feat: add local harness protocol                (Phase 4)
 06dbf5b docs: record the Phase 3 commit in the handoff
-c2ef7e7 feat: improve desktop note experience          (Phase 3)
-8d83a70 fix: complete markdown note runtime behavior   (Phase 2 closeout)
+c2ef7e7 feat: improve desktop note experience           (Phase 3)
+8d83a70 fix: complete markdown note runtime behavior    (Phase 2 closeout)
 c1c1f85 docs: record Phase 2 commit in handoff
-2c8c872 feat: edit notes as markdown with todos        (Phase 2)
+2c8c872 feat: edit notes as markdown with todos         (Phase 2)
+
+<PHASE5-SHA> feat: add harness task note                  (Phase 5)
+<PHASE5-DOCS-SHA> docs: record the Phase 5 commit in the handoff
 ```
 
-Every commit is local. Nothing has been pushed. Phase 4 adds the harness
-protocol under `src-tauri/src/harness/`: the model and its validation, the
-in-memory registry, the loopback push endpoint, the adapter seam, and the Rust
-core tests that cover them.
+Every commit is local. Nothing has been pushed. Phase 5 adds the Harness Task
+Note: `src-tauri/src/harness_window.rs`, the live-active filter in
+`harness/registry.rs`, `list_live_active_harness_tasks`, the tray item and the
+Show All / Hide All integration, plus `HarnessTaskWindow.tsx`,
+`HarnessTaskList.tsx`, `harness/elapsed.ts` and `harness/grouping.ts`. No
+existing commit was rewritten or squashed.
