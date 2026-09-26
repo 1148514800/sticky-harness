@@ -613,8 +613,8 @@ c2ef7e7 feat: improve desktop note experience           (Phase 3)
 c1c1f85 docs: record Phase 2 commit in handoff
 2c8c872 feat: edit notes as markdown with todos         (Phase 2)
 
-<PHASE5-SHA> feat: add harness task note                  (Phase 5)
-<PHASE5-DOCS-SHA> docs: record the Phase 5 commit in the handoff
+7fa106b feat: add harness task note                   (Phase 5)
+aba0dcb docs: record the Phase 5 commit in the handoff
 ```
 
 Every commit is local. Nothing has been pushed. Phase 5 adds the Harness Task
