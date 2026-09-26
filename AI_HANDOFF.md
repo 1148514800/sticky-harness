@@ -790,7 +790,7 @@ c1c1f85 docs: record Phase 2 commit in handoff
 b70e5a6 docs: record the Phase 5 commit in the handoff
 
 756386e feat: add harness adapters                    (Phase 6)
-<docs>  docs: record the Phase 6 commit in the handoff
+393aef5 docs: record the Phase 6 commit in the handoff
 ```
 
 Every commit is local. Nothing has been pushed. Phase 6 adds the adapters:
