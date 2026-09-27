@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isHarnessTaskLabel, noteIdForLabel } from "./types/desktop";
+import { isAdaptersLabel, isHarnessTaskLabel, noteIdForLabel } from "./types/desktop";
+import { AdaptersWindow } from "./windows/AdaptersWindow";
 import { HarnessTaskWindow } from "./windows/HarnessTaskWindow";
 import { NoteWindow } from "./windows/NoteWindow";
 
@@ -10,10 +11,11 @@ import { NoteWindow } from "./windows/NoteWindow";
  * view is chosen from that window's own label, so there is no shared root window
  * and closing one window can never affect another.
  *
- * There are two kinds of window, and the label says which:
+ * There are three kinds of window, and the label says which:
  *
- * - `note-<id>`      a normal Markdown note the user owns
- * - `harness-tasks`  the single read-only harness status note
+ * - `note-<id>`        a normal Markdown note the user owns
+ * - `harness-tasks`    the single read-only harness status note
+ * - `harness-adapters` the single adapter configuration window
  */
 function App() {
   let label = "";
@@ -26,6 +28,10 @@ function App() {
 
   if (isHarnessTaskLabel(label)) {
     return <HarnessTaskWindow />;
+  }
+
+  if (isAdaptersLabel(label)) {
+    return <AdaptersWindow />;
   }
 
   const noteId = noteIdForLabel(label);

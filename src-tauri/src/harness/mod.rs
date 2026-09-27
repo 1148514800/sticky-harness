@@ -23,6 +23,7 @@
 //! new adapter and nothing else moves.
 
 pub mod adapter;
+pub mod adapters_window;
 pub mod manager;
 pub mod protocol;
 pub mod registry;
@@ -79,6 +80,44 @@ impl HarnessState {
         if let Some(manager) = slot.as_ref() {
             manager.stop();
         }
+    }
+
+    /// Replace the running adapters with the ones this configuration describes.
+    ///
+    /// The old workers are told to stop first, then the new set starts. That
+    /// order is what makes a configuration change safe: nothing is running from
+    /// the previous configuration while the new one is being built, and a bad
+    /// entry is skipped by `AdapterManager::start` exactly as it is at startup.
+    ///
+    /// Returns how the new set started, for the log line.
+    pub fn apply_adapter_config(&self, config: &manager::AdapterConfig) -> manager::RunState {
+        let manager = manager::AdapterManager::start(Arc::clone(&self.registry), config);
+        let run_state = manager.state();
+
+        let mut slot = self.manager.lock().unwrap_or_else(|error| error.into_inner());
+        // Stopping the previous set here drops the old flag, which is what asks
+        // its workers to leave; they are detached, so this cannot block.
+        if let Some(previous) = slot.replace(manager) {
+            previous.stop();
+        }
+
+        run_state
+    }
+
+    /// The last health reading of every configured adapter.
+    pub fn adapter_statuses(&self) -> Vec<manager::AdapterStatus> {
+        let slot = self.manager.lock().unwrap_or_else(|error| error.into_inner());
+        slot.as_ref()
+            .map(|manager| manager.statuses())
+            .unwrap_or_default()
+    }
+
+    /// What the adapters are doing, for the window's footer.
+    pub fn adapter_run_state(&self) -> manager::RunState {
+        let slot = self.manager.lock().unwrap_or_else(|error| error.into_inner());
+        slot.as_ref()
+            .map(|manager| manager.state())
+            .unwrap_or(manager::RunState::Idle)
     }
 }
 

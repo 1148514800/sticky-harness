@@ -87,6 +87,68 @@ export interface HarnessWindowStatus {
   pinned: boolean;
 }
 
+/** The window label of the Adapter Management window. */
+export const ADAPTERS_LABEL = "harness-adapters";
+
+/** Which transport an adapter reads through. Mirrors the Rust enum. */
+export type AdapterKind = "local-json" | "local-http";
+
+/**
+ * One adapter as the management window shows it.
+ *
+ * Mirrors `AdapterView` in Rust: the configuration plus the last health
+ * reading. The window never receives the raw file format, so it cannot
+ * round-trip a field it did not display.
+ */
+export interface AdapterView {
+  name: string;
+  kind: AdapterKind;
+  enabled: boolean;
+  /** A file path, or the loopback URL for an HTTP adapter. */
+  source: string;
+  /** `ok`, `error`, `rejected`, `waiting`, or `off` while disabled. */
+  status: string;
+  detail?: string | null;
+  checked_at?: number | null;
+  succeeded_at?: number | null;
+  poll_interval_millis?: number | null;
+  timeout_millis?: number | null;
+  http_path?: string | null;
+  port?: number | null;
+  path?: string | null;
+}
+
+/** Everything the adapter window renders in one poll. */
+export interface AdaptersView {
+  adapters: AdapterView[];
+  /** How many adapters are actually running. */
+  running: number;
+  /**
+   * Why the file on disk could not be used, if it could not.
+   *
+   * A file that does not parse starts the app with no adapters, which is
+   * correct but looks the same as "no adapters configured" unless we say so.
+   */
+  problem?: string | null;
+}
+
+/** The editable half of an adapter, as the form sends it. */
+export interface AdapterInput {
+  name: string;
+  kind: AdapterKind;
+  enabled: boolean;
+  path?: string | null;
+  port?: number | null;
+  http_path?: string | null;
+  timeout_millis?: number | null;
+  poll_interval_millis?: number | null;
+}
+
+/** Whether a window label belongs to the adapter management window. */
+export function isAdaptersLabel(label: string): boolean {
+  return label === ADAPTERS_LABEL;
+}
+
 /** Whether a window label belongs to the Harness Task Note. */
 export function isHarnessTaskLabel(label: string): boolean {
   return label === HARNESS_TASK_LABEL;

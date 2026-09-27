@@ -7,6 +7,20 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 7 — Adapter Management (Completed)**
+
+Adapters no longer need a hand-edited JSON file. A **Harness Adapters** window in
+the tray lists every adapter with its source and last status, and can add, edit,
+enable, disable, delete and reload them. It writes the same
+`harness-adapters.json` as before, and Rust still owns every validation rule, so
+the window can never save a configuration the startup path would refuse. See
+**Adapter Management** below.
+
+The tray Exit path was measured and left unchanged: the Rust side finishes in
+about 34 ms, and the couple of seconds that follow are Windows and WebView2
+tearing the windows down, which no adapter affects. The 1.5 s flush budget stays
+as it is, because it exists to save your last keystrokes.
+
 **Phase 6 — Harness Adapters (Completed)**
 
 Something now produces the harness state the app displays. Two adapters, both
@@ -43,7 +57,8 @@ The tray is the app's desktop surface:
 | --- | --- |
 | New Note | Creates and opens another note |
 | Harness Tasks | Opens the Harness Task Note, or focuses it if it is already open |
-| Show All Notes | Reveals every window that is hidden, notes and the Harness Task Note alike |
+| Harness Adapters | Opens the Adapter Management window, or focuses it if it is already open |
+| Show All Notes | Reveals every hidden window: notes, the Harness Task Note and the adapter window alike |
 | Hide All Notes | Hides every window without closing it |
 | Start with Windows | Ticks or unticks starting the app when you sign in |
 | Exit | Quits the app and keeps every note |
@@ -52,7 +67,8 @@ Hiding is session-only: hidden notes are not deleted, not saved and not
 remembered across a restart. **Start with Windows** is the real Windows
 autostart entry, managed by the official Tauri autostart plugin and ticked from
 the actual OS state. A note can be resized down to 220x160. Images, themes,
-search, a settings window and harness integration are not in yet.
+search and a general settings window are not in yet; adapters have their own
+management window.
 
 ## Tech Stack
 
@@ -145,7 +161,9 @@ sticky-harness/
 │  │  │  ├─ protocol.rs        # The model, status enum and validation
 │  │  │  ├─ registry.rs        # In-memory state and active-task filtering
 │  │  │  ├─ server.rs          # Loopback-only push endpoint
-│  │  │  └─ adapter.rs         # Pull seam for a future harness adapter
+│  │  │  ├─ adapter.rs         # LocalJsonAdapter / LocalHttpAdapter
+│  │  │  ├─ manager.rs         # Adapter config, workers, failure isolation
+│  │  │  └─ adapters_window.rs # The Adapter Management window and commands
 │  │  └─ paths.rs              # The one owner of the local data directory
 │  ├─ capabilities/default.json
 │  └─ tauri.conf.json
@@ -195,8 +213,10 @@ hardcode a path or place user data in the project directory.
 - **Closing every note does not quit the app.** The tray stays alive so you can
   create a note again from **New Note**.
 - **Choosing Exit in the tray quits the process and keeps every note.** Deleting
-  notes on exit is never intended behaviour. Exit waits briefly so the last
-  keystrokes can be saved.
+  notes on exit is never intended behaviour. Exit waits up to 1.5 s so the last
+  keystrokes can be saved; after that, Windows and the WebView2 runtime need a
+  couple of seconds to tear the windows down, which is normal for this stack and
+  not something the app waits on.
 - **Ctrl+click opens a link.** A normal click edits it. Only http, https and
   mailto links open.
 - **Hide All Notes hides; it never deletes.** Every note window disappears, but
@@ -208,6 +228,10 @@ hardcode a path or place user data in the project directory.
 - **The Harness Task Note is not a note.** Closing it with `X` hides it instead
   of deleting anything, because nothing in it is user content. There is only
   ever one, and it never appears in the `notes` directory.
+- **The Adapter Management window follows the same rule.** Tray ->
+  Harness Adapters opens it once; closing it hides it rather than deleting
+  anything, `Show All` / `Hide All` include it, and its configuration lives in
+  `harness-adapters.json` rather than in the window.
 - **Start with Windows is the real thing.** It writes the same Windows
   autostart entry the OS itself uses, through the official Tauri plugin; the
   tick is read back from the OS, so it is still correct if the entry was changed
@@ -346,7 +370,59 @@ last good snapshot - the staleness rule retires it instead, so a producer that
 comes back reappears on its own.
 
 Adapters stop when the app exits, so **Exit** in the tray never waits on a
-producer.
+producer. The whole Rust exit path runs in a few tens of milliseconds; the second
+or two that follows is Windows and the WebView2 runtime tearing down the windows,
+which happens with or without adapters.
+
+## Adapter Management
+
+**Tray -> Harness Adapters** opens one window that lists every configured
+adapter with its name, type, source, enabled state and last status. From there
+you can:
+
+| Action | What it does |
+| --- | --- |
+| Add Local JSON | A new adapter reading one JSON file |
+| Add Local HTTP | A new adapter reading a loopback port |
+| Edit | Change any field of an existing adapter, including its name |
+| Enable / Disable | Stop or restart one adapter without touching the rest |
+| Delete | Remove one adapter |
+| Reload | Re-read `harness-adapters.json` after editing it by hand |
+
+The status column comes from the last poll: `ok` with the harness it reported,
+`error` with the producer's message, `rejected` when a producer sent something
+the protocol refused, `waiting` before the first poll, or `off` while the
+adapter is disabled. There is no log, no history and no per-task detail here -
+the Harness Tasks window already answers "what is running".
+
+The window writes the same `harness-adapters.json` as before, and every edit
+goes through the same Rust validation the startup path uses. Two consequences
+worth knowing:
+
+- **A rejected edit changes nothing.** The message appears in the window, the
+  file on disk is left exactly as it was, and every other adapter keeps running.
+- **A file that cannot be read says so.** If `harness-adapters.json` is
+  hand-edited into something that does not parse or does not validate, the window
+  shows the reason instead of an empty list, and saving any adapter replaces the
+  bad file with a good one. At startup the same file is logged and ignored, so
+  notes and the tray always come up.
+- **A name is not a free label.** Renaming an adapter is an edit and replaces
+  the old entry; adding a second adapter with a name that is already taken is
+  refused rather than silently overwriting the one you cannot see from the add
+  form.
+
+Disabling is a real stop, not a filtered view: that adapter's worker leaves and
+its snapshot ages out through the normal staleness rule, exactly as if the
+producer had gone quiet. Enabling it again starts it immediately.
+
+Adding, editing, deleting, enabling or disabling writes the file first and only
+then restarts the adapters, so a failed write leaves the running set untouched.
+The restart covers every adapter, not just the one that changed - one code path
+for validation and isolation is worth one skipped poll.
+
+The window is a utility window, not a note: closing it hides it, `Show All
+Notes` and `Hide All Notes` include it, and it is not restored on startup. The
+tray item reopens it.
 
 ### Why there is no Codex or DeepSeek adapter
 
@@ -366,7 +442,8 @@ built on it could only report guesses.
 - Phase 4 — Harness Protocol ✅
 - Phase 5 — Harness Task Note ✅
 - Phase 6 — Harness Adapters ✅
-- Phase 7 — Adapter Management / Product Polish
+- Phase 7 — Adapter Management ✅
+- Phase 8 — Codex / Harness Bridge Experience
 
-Phases 1 to 6 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 7 are implemented, and nothing is pushed anywhere. See
 `AI_HANDOFF.md` for the detailed current state and the next step.

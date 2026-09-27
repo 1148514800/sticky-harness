@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { ActiveHarnessTask, HarnessWindowStatus, NoteRecord } from "../types/desktop";
+import type {
+  ActiveHarnessTask,
+  AdapterInput,
+  AdaptersView,
+  HarnessWindowStatus,
+  NoteRecord,
+} from "../types/desktop";
 
 /**
  * Thin wrapper around the Rust note commands.
@@ -75,6 +81,52 @@ export async function openExternalUrl(url: string): Promise<void> {
  */
 export async function listLiveActiveHarnessTasks(): Promise<ActiveHarnessTask[]> {
   return callCommand<ActiveHarnessTask[]>("list_live_active_harness_tasks");
+}
+
+/**
+ * The configured adapters, joined with their last health reading.
+ *
+ * The window polls this once a second. Every mutation below returns the same
+ * shape, so the caller never has to re-read after a change.
+ */
+export async function listAdapters(): Promise<AdaptersView> {
+  return callCommand<AdaptersView>("list_adapters");
+}
+
+/**
+ * Add an adapter, or replace the one with the same name.
+ *
+ * Rust validates the whole resulting configuration before writing anything, so
+ * a rejected edit throws and leaves the file untouched.
+ */
+export async function saveAdapter(
+  entry: AdapterInput,
+  previousName?: string | null,
+): Promise<AdaptersView> {
+  return callCommand<AdaptersView>("save_adapter", {
+    entry,
+    previousName: previousName ?? null,
+  });
+}
+
+/** Turn one adapter on or off. */
+export async function setAdapterEnabled(name: string, enabled: boolean): Promise<AdaptersView> {
+  return callCommand<AdaptersView>("set_adapter_enabled", { name, enabled });
+}
+
+/** Remove one adapter. */
+export async function deleteAdapter(name: string): Promise<AdaptersView> {
+  return callCommand<AdaptersView>("delete_adapter", { name });
+}
+
+/**
+ * Re-read `harness-adapters.json` and start from it.
+ *
+ * The escape hatch for hand-editing: the file is the contract, so a change made
+ * in an editor must not require a restart.
+ */
+export async function reloadAdapters(): Promise<AdaptersView> {
+  return callCommand<AdaptersView>("reload_adapters");
 }
 
 /** Whether the Harness Task Note exists, is visible, and is pinned. */

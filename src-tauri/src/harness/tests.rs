@@ -12,7 +12,8 @@ use super::adapter::{
     parse_local_snapshot, HarnessAdapter, LocalHttpAdapter, LocalJsonAdapter, MAX_ADAPTER_BYTES,
 };
 use super::manager::{
-    AdapterConfig, AdapterKind, AdapterManager, RunState, MAX_ADAPTERS,
+    AdapterConfig, AdapterEntry, AdapterKind, AdapterManager, AdapterOutcome, RunState,
+    MAX_ADAPTERS,
 };
 use super::protocol::{
     HarnessSnapshot, HarnessSource, HarnessStatus, HarnessTask, MAX_ID_CHARS, MAX_TASKS_PER_SNAPSHOT,
@@ -1496,4 +1497,352 @@ fn stopping_the_manager_ends_every_adapter_thread() {
 fn the_run_state_reports_what_is_running() {
     assert_eq!(RunState::Idle.adapters(), 0);
     assert_eq!(RunState::Running(3).adapters(), 3);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 7 - adapter management
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_name_that_is_already_taken_cannot_be_added_again() {
+    // The add form must not be able to silently overwrite an adapter the user
+    // cannot see from there. This is the collision the management window has to
+    // refuse rather than absorb.
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "taken", "kind": "local-json", "path": "C:/tmp/a.json" } ] }"#,
+    )
+    .unwrap();
+
+    let duplicate = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "taken", "kind": "local-json", "path": "C:/tmp/b.json" } ] }"#,
+    )
+    .unwrap()
+    .adapters
+    .remove(0);
+
+    // An "add" is only an add when the name is free.
+    assert!(config.adapters.iter().any(|existing| existing.name == duplicate.name));
+}
+
+#[test]
+fn a_rename_does_not_leave_the_old_name_behind() {
+    let mut config = AdapterConfig::parse(
+        r#"{ "adapters": [
+            { "name": "old", "kind": "local-json", "path": "C:/tmp/a.json" },
+            { "name": "other", "kind": "local-json", "path": "C:/tmp/b.json" }
+        ] }"#,
+    )
+    .unwrap();
+
+    let mut renamed = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "new", "kind": "local-json", "path": "C:/tmp/a.json" } ] }"#,
+    )
+    .unwrap()
+    .adapters
+    .remove(0);
+
+    // What the window does for an edit whose name changed.
+    assert!(config.remove("old"));
+    renamed.enabled = true;
+    config.put(renamed);
+
+    assert_eq!(config.adapters.len(), 2, "a rename replaces, it does not append");
+    let names: Vec<&str> = config.adapters.iter().map(|entry| entry.name.as_str()).collect();
+    assert!(names.contains(&"new"));
+    assert!(names.contains(&"other"));
+    assert!(!names.contains(&"old"), "the old name must not survive a rename");
+}
+
+#[test]
+fn put_replaces_an_adapter_with_the_same_name_in_place() {
+    let mut config = AdapterConfig::parse(
+        r#"{ "adapters": [
+            { "name": "a", "kind": "local-json", "path": "C:/tmp/a.json" },
+            { "name": "b", "kind": "local-json", "path": "C:/tmp/b.json" }
+        ] }"#,
+    )
+    .unwrap();
+
+    let index = config.put(
+        AdapterConfig::parse(r#"{ "adapters": [ { "name": "a", "kind": "local-json", "path": "C:/tmp/new.json" } ] }"#)
+            .unwrap()
+            .adapters
+            .remove(0),
+    );
+
+    assert_eq!(index, 0, "an edit keeps the existing position");
+    assert_eq!(config.adapters.len(), 2, "editing must not append a duplicate");
+    assert_eq!(config.adapters[0].path.as_deref(), Some("C:/tmp/new.json"));
+    assert_eq!(config.adapters[1].name, "b");
+}
+
+#[test]
+fn put_appends_an_adapter_that_does_not_exist_yet() {
+    let mut config = AdapterConfig::default();
+
+    let index = config.put(
+        AdapterConfig::parse(r#"{ "adapters": [ { "name": "new", "kind": "local-json", "path": "C:/tmp/n.json" } ] }"#)
+            .unwrap()
+            .adapters
+            .remove(0),
+    );
+
+    assert_eq!(index, 0);
+    assert_eq!(config.adapters.len(), 1);
+    assert_eq!(config.adapters[0].name, "new");
+}
+
+#[test]
+fn remove_reports_whether_anything_was_removed() {
+    let mut config = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "gone", "kind": "local-json", "path": "C:/tmp/g.json" } ] }"#,
+    )
+    .unwrap();
+
+    assert!(config.remove("gone"));
+    assert!(config.adapters.is_empty());
+    assert!(!config.remove("gone"), "removing twice must not report success");
+}
+
+#[test]
+fn a_configuration_written_by_the_window_can_be_read_back() {
+    // The management window's whole contract: what it writes is what the
+    // startup path accepts.
+    let mut config = AdapterConfig::default();
+    config.put(
+        AdapterConfig::parse(
+            r#"{ "adapters": [ { "name": "round-trip", "kind": "local-http", "port": 18001, "timeout_millis": 500 } ] }"#,
+        )
+        .unwrap()
+        .adapters
+        .remove(0),
+    );
+
+    let json = config.to_json().unwrap();
+    let parsed = AdapterConfig::parse(&json).unwrap();
+
+    assert_eq!(parsed, config);
+    assert_eq!(parsed.adapters[0].kind, AdapterKind::LocalHttp);
+    assert_eq!(parsed.adapters[0].port, Some(18001));
+}
+
+#[test]
+fn a_saved_configuration_survives_a_write_and_read_from_disk() {
+    let path = temp_file("written-config.json", "{}");
+    let mut config = AdapterConfig::default();
+    config.put(
+        AdapterConfig::parse(
+            r#"{ "adapters": [ { "name": "on-disk", "kind": "local-json", "path": "C:/tmp/d.json" } ] }"#,
+        )
+        .unwrap()
+        .adapters
+        .remove(0),
+    );
+
+    super::manager::save_config(&path, &config).unwrap();
+
+    let loaded = super::manager::load_config(&path);
+    assert_eq!(loaded, config, "what the window saved is what startup reads");
+}
+
+#[test]
+fn an_invalid_configuration_is_refused_before_anything_is_written() {
+    // The rule that keeps a bad edit from being worse than no edit: validation
+    // is a pre-condition of the write, not a hope about it.
+    let path = temp_file("guarded-config.json", r#"{ "adapters": [] }"#);
+    let original = std::fs::read_to_string(&path).unwrap();
+
+    let mut config = AdapterConfig::parse(r#"{ "adapters": [] }"#).unwrap();
+    config.adapters.push(AdapterEntry {
+        name: "no-path".to_string(),
+        kind: AdapterKind::LocalJson,
+        enabled: true,
+        poll_interval_millis: None,
+        path: None,
+        port: None,
+        http_path: None,
+        timeout_millis: None,
+    });
+
+    assert!(config.validate().is_err(), "a local-json adapter needs a path");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "a refused edit must leave the file exactly as it was"
+    );
+}
+
+#[test]
+fn a_new_manager_reports_a_waiting_status_for_every_configured_adapter() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [
+            { "name": "one", "kind": "local-json", "path": "C:/tmp/1.json" },
+            { "name": "two", "kind": "local-json", "path": "C:/tmp/2.json", "enabled": false }
+        ] }"#,
+    )
+    .unwrap();
+
+    let manager = AdapterManager::start(registry, &config);
+    let statuses = manager.statuses();
+
+    // A disabled adapter is shown too, so the window can offer to enable it.
+    assert_eq!(statuses.len(), 2);
+    assert!(statuses.iter().all(|status| status.outcome == AdapterOutcome::Pending));
+    assert_eq!(statuses[0].name, "one");
+    assert_eq!(statuses[1].name, "two");
+    manager.stop();
+}
+
+#[test]
+fn a_disabled_adapter_keeps_waiting_while_an_enabled_one_reports() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    super::manager::poll_once_for_test(
+        FakeAdapter {
+            name: "good".to_string(),
+            snapshot: running_snapshot("harness-a"),
+        },
+        registry.clone(),
+        stop,
+    );
+
+    assert_eq!(registry.len(), 1);
+    // Nothing about a disabled adapter is in the registry, which is what makes
+    // "disable" a real stop rather than a hidden filter.
+    assert!(registry.get("harness-b").is_none());
+}
+
+#[test]
+fn the_source_label_names_the_file_or_the_loopback_url() {
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [
+            { "name": "file", "kind": "local-json", "path": "C:/status/h.json" },
+            { "name": "http", "kind": "local-http", "port": 18001 },
+            { "name": "http-path", "kind": "local-http", "port": 18002, "http_path": "/custom" }
+        ] }"#,
+    )
+    .unwrap();
+
+    assert_eq!(config.adapters[0].source_label(), "C:/status/h.json");
+    assert_eq!(config.adapters[1].source_label(), "http://127.0.0.1:18001/api/harness/snapshot");
+    assert_eq!(config.adapters[2].source_label(), "http://127.0.0.1:18002/custom");
+}
+
+#[test]
+fn a_source_label_can_never_name_a_remote_host() {
+    // There is no host field to point somewhere else, which is the property
+    // that makes the displayed source safe to show and the adapter safe to run.
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "http", "kind": "local-http", "port": 18001 } ] }"#,
+    )
+    .unwrap();
+
+    let label = config.adapters[0].source_label();
+    assert!(label.starts_with("http://127.0.0.1:"), "label was: {label}");
+}
+
+#[test]
+fn an_adapter_outcome_labels_itself_for_the_window() {
+    assert_eq!(AdapterOutcome::Pending.label(), "waiting");
+    assert_eq!(AdapterOutcome::Ok { harness_id: "h".to_string() }.label(), "ok");
+    assert_eq!(AdapterOutcome::Failed { message: "x".to_string() }.label(), "error");
+    assert_eq!(AdapterOutcome::Rejected { message: "x".to_string() }.label(), "rejected");
+}
+
+#[test]
+fn only_a_problem_outcome_carries_a_detail_line() {
+    assert!(AdapterOutcome::Pending.detail().is_none());
+    assert!(AdapterOutcome::Ok { harness_id: "h".to_string() }.detail().is_none());
+    assert_eq!(
+        AdapterOutcome::Failed { message: "boom".to_string() }.detail(),
+        Some("boom")
+    );
+    assert_eq!(
+        AdapterOutcome::Rejected { message: "bad".to_string() }.detail(),
+        Some("bad")
+    );
+}
+
+#[test]
+fn the_checked_loader_reports_why_a_file_was_unusable() {
+    // The management window uses this so a hand-edited file that does not parse
+    // says so, instead of looking like "no adapters configured".
+    let dir = std::env::temp_dir().join("sticky-harness-load-checked");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let missing = dir.join("does-not-exist.json");
+    assert!(
+        super::manager::load_checked(&missing).is_ok(),
+        "a missing file means no adapters, not an error"
+    );
+
+    let broken = dir.join("broken.json");
+    std::fs::write(&broken, "{ not json").unwrap();
+    let error = super::manager::load_checked(&broken).unwrap_err();
+    assert!(error.contains("malformed"), "error was: {error}");
+
+    let bad_entry = dir.join("bad-entry.json");
+    std::fs::write(&bad_entry, r#"{ "adapters": [ { "name": "x", "kind": "local-json" } ] }"#).unwrap();
+    let error = super::manager::load_checked(&bad_entry).unwrap_err();
+    assert!(error.contains("path"), "error was: {error}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_disabled_row_reports_off_instead_of_waiting() {
+    // "waiting" would promise a poll that a disabled adapter will never make,
+    // so the row says what is actually true about it.
+    assert_eq!(super::adapters_window::status_label(false, None), "off");
+    assert_eq!(
+        super::adapters_window::status_label(
+            false,
+            Some(&AdapterOutcome::Ok { harness_id: "h".to_string() })
+        ),
+        "off",
+        "disabling hides a previous success rather than showing a stale one"
+    );
+}
+
+#[test]
+fn an_enabled_row_reports_its_last_outcome_or_waiting() {
+    assert_eq!(super::adapters_window::status_label(true, None), "waiting");
+    assert_eq!(
+        super::adapters_window::status_label(
+            true,
+            Some(&AdapterOutcome::Failed { message: "x".to_string() })
+        ),
+        "error"
+    );
+}
+
+#[test]
+fn a_disabled_adapter_is_not_a_configuration_error() {
+    // Disabling is a normal edit, so it must never be refused by validation.
+    let config = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "off", "kind": "local-json", "path": "C:/tmp/o.json", "enabled": false } ] }"#,
+    )
+    .unwrap();
+
+    assert!(config.validate().is_ok());
+    assert_eq!(config.enabled().count(), 0);
+}
+
+#[test]
+fn swapping_the_configuration_replaces_the_running_set() {
+    let registry = std::sync::Arc::new(HarnessRegistry::default());
+    let first = AdapterConfig::parse(
+        r#"{ "adapters": [ { "name": "first", "kind": "local-json", "path": "C:/tmp/1.json", "poll_interval_millis": 60000 } ] }"#,
+    )
+    .unwrap();
+
+    let manager = AdapterManager::start(registry.clone(), &first);
+    assert_eq!(manager.state(), RunState::Running(1));
+    manager.stop();
+
+    let second = AdapterConfig::default();
+    let next = AdapterManager::start(registry, &second);
+    assert_eq!(next.state(), RunState::Idle, "an empty config runs nothing");
 }

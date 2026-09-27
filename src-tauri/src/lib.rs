@@ -36,6 +36,12 @@ pub fn run() {
             harness_window::set_harness_window_pinned,
             harness::harness_api_port,
             harness::harness_is_stale,
+            harness::adapters_window::open_adapters_window,
+            harness::adapters_window::list_adapters,
+            harness::adapters_window::save_adapter,
+            harness::adapters_window::set_adapter_enabled,
+            harness::adapters_window::delete_adapter,
+            harness::adapters_window::reload_adapters,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

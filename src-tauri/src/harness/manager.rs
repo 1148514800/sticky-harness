@@ -17,9 +17,10 @@
 //!   thread sleeps in short slices against a shared stop flag, so stopping is
 //!   bounded by one slice rather than by the polling interval.
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,7 @@ use super::adapter::{
     HarnessAdapter, LocalHttpAdapter, LocalJsonAdapter, DEFAULT_HTTP_PATH, DEFAULT_HTTP_TIMEOUT,
 };
 
+use super::protocol::now_millis;
 use super::registry::HarnessRegistry;
 
 /// How long one adapter waits between polls.
@@ -55,6 +57,62 @@ pub const MAX_POLL_INTERVAL_MILLIS: u64 = 10 * 60 * 1000;
 /// Same reasoning as the push endpoint's task limit: this is a status surface,
 /// not a fleet manager.
 pub const MAX_ADAPTERS: usize = 32;
+
+/// The most recent outcome of one adapter, for the management window.
+///
+/// Deliberately tiny and in-memory: this is a health indicator, not a log. It
+/// holds one line per adapter rather than a history, so nothing here can grow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdapterOutcome {
+    /// The adapter has not finished a poll yet.
+    Pending,
+    /// The last poll produced a snapshot with this harness id.
+    Ok { harness_id: String },
+    /// The last poll failed, with the producer-facing reason.
+    Failed { message: String },
+    /// The last poll produced a snapshot the protocol refused.
+    Rejected { message: String },
+}
+
+impl AdapterOutcome {
+    /// A short label for the window.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Pending => "waiting",
+            Self::Ok { .. } => "ok",
+            Self::Failed { .. } => "error",
+            Self::Rejected { .. } => "rejected",
+        }
+    }
+
+    /// The detail line, if there is one worth showing.
+    pub fn detail(&self) -> Option<&str> {
+        match self {
+            Self::Pending | Self::Ok { .. } => None,
+            Self::Failed { message } | Self::Rejected { message } => Some(message),
+        }
+    }
+}
+
+/// One adapter's health, as of the last poll, in local time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterStatus {
+    /// The configured name.
+    pub name: String,
+    /// The last outcome.
+    pub outcome: AdapterOutcome,
+    /// Local clock reading of the last poll attempt, in Unix milliseconds.
+    pub checked_at: Option<u64>,
+    /// Local clock reading of the last *successful* poll, in Unix milliseconds.
+    pub succeeded_at: Option<u64>,
+}
+
+/// Statuses shared by every adapter thread, keyed by adapter name.
+///
+/// A mutex around a map this small is cheaper than any lock-free scheme and it
+/// cannot deadlock: every critical section here only touches the map.
+pub type AdapterStatuses = Arc<Mutex<BTreeMap<String, AdapterStatus>>>;
+
 
 /// How long a stop request may take to be noticed, in milliseconds.
 const STOP_SLICE_MILLIS: u64 = 50;
@@ -108,20 +166,23 @@ pub struct AdapterEntry {
     pub enabled: bool,
     /// How often to poll, in milliseconds. Defaults to
     /// [`DEFAULT_POLL_INTERVAL_MILLIS`].
-    #[serde(default)]
+    ///
+    /// Omitted when unset, so a hand-edited file stays readable instead of
+    /// filling up with explicit nulls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poll_interval_millis: Option<u64>,
     /// The file to read. Required by [`AdapterKind::LocalJson`].
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// The port to read. Required by [`AdapterKind::LocalHttp`].
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
     /// The request path, for [`AdapterKind::LocalHttp`]. Defaults to
     /// [`DEFAULT_HTTP_PATH`].
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_path: Option<String>,
     /// How long one HTTP request may take, in milliseconds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_millis: Option<u64>,
 }
 
@@ -191,6 +252,38 @@ impl AdapterConfig {
     pub fn enabled(&self) -> impl Iterator<Item = &AdapterEntry> {
         self.adapters.iter().filter(|entry| entry.enabled)
     }
+
+    /// Replace the adapter with the same name, or append it.
+    ///
+    /// Returns the index it now occupies. Used by the management window, which
+    /// edits one entry at a time rather than rewriting the whole file itself.
+    pub fn put(&mut self, entry: AdapterEntry) -> usize {
+        match self.adapters.iter().position(|existing| existing.name == entry.name) {
+            Some(index) => {
+                self.adapters[index] = entry;
+                index
+            }
+            None => {
+                self.adapters.push(entry);
+                self.adapters.len() - 1
+            }
+        }
+    }
+
+    /// Remove the adapter with this name. Returns whether anything was removed.
+    pub fn remove(&mut self, name: &str) -> bool {
+        let before = self.adapters.len();
+        self.adapters.retain(|entry| entry.name != name);
+        self.adapters.len() != before
+    }
+
+    /// The serialised form that goes on disk.
+    pub fn to_json(&self) -> Result<String, AdapterConfigError> {
+        let mut json = serde_json::to_string_pretty(self)
+            .map_err(|error| format!("could not serialise the adapter config: {error}"))?;
+        json.push('\n');
+        Ok(json)
+    }
 }
 
 impl AdapterEntry {
@@ -240,6 +333,24 @@ impl AdapterEntry {
         Ok(())
     }
 
+    /// A short "where does this read from" string for the management window.
+    ///
+    /// The file path for a JSON adapter, or the loopback URL for an HTTP one.
+    /// Built from the port alone, like the adapter itself, so this can never
+    /// display a remote host: there is no field that could point one at us.
+    pub fn source_label(&self) -> String {
+        match self.kind {
+            AdapterKind::LocalJson => self.path.clone().unwrap_or_default(),
+            AdapterKind::LocalHttp => format!(
+                "http://127.0.0.1:{}{}",
+                self.port.unwrap_or(0),
+                self.http_path
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_HTTP_PATH.to_string())
+            ),
+        }
+    }
+
     /// The interval this adapter polls at.
     pub fn interval(&self) -> Duration {
         Duration::from_millis(
@@ -278,30 +389,60 @@ impl AdapterEntry {
 /// the same as an empty list. An unreadable or invalid file is reported once and
 /// also treated as empty, for the same reason a busy harness port is: harness
 /// reporting is a feature, not a prerequisite.
-pub fn load_config(path: &PathBuf) -> AdapterConfig {
+pub fn load_checked(path: &PathBuf) -> Result<AdapterConfig, AdapterConfigError> {
     if !path.exists() {
-        return AdapterConfig::default();
+        return Ok(AdapterConfig::default());
     }
 
-    match std::fs::read_to_string(path) {
-        Ok(raw) => match AdapterConfig::parse(&raw) {
-            Ok(config) => config,
-            Err(error) => {
-                eprintln!(
-                    "[sticky-harness] ignoring the harness adapter config {}: {error}",
-                    path.display()
-                );
-                AdapterConfig::default()
-            }
-        },
+    let raw = std::fs::read_to_string(path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+
+    AdapterConfig::parse(&raw)
+}
+
+/// Load the adapter configuration, reporting a bad file once and then ignoring it.
+pub fn load_config(path: &PathBuf) -> AdapterConfig {
+    match load_checked(path) {
+        Ok(config) => config,
         Err(error) => {
             eprintln!(
-                "[sticky-harness] could not read {}: {error}",
+                "[sticky-harness] ignoring the harness adapter config {}: {error}",
                 path.display()
             );
             AdapterConfig::default()
         }
     }
+}
+
+/// Write the adapter configuration, temp file then rename.
+///
+/// The same shape as a note record and the window configs: a half-written
+/// configuration must never be what the next start reads. If the rename is
+/// refused (this machine refuses renames inside AppData), the copy fallback
+/// keeps the save rather than losing the user's edit.
+pub fn save_config(path: &Path, config: &AdapterConfig) -> Result<(), AdapterConfigError> {
+    let json = config.to_json()?;
+    let temp = path.with_extension("json.tmp");
+
+    std::fs::write(&temp, json)
+        .map_err(|error| format!("could not write {}: {error}", temp.display()))?;
+
+    if let Err(rename_error) = std::fs::rename(&temp, path) {
+        if let Err(copy_error) = std::fs::copy(&temp, path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(format!(
+                "could not replace {}: {rename_error} (copy fallback also failed: {copy_error})",
+                path.display()
+            ));
+        }
+        eprintln!(
+            "[sticky-harness] rename was refused for {} ({rename_error}); used the copy fallback",
+            path.display()
+        );
+    }
+
+    let _ = std::fs::remove_file(&temp);
+    Ok(())
 }
 
 /// What the manager is doing, for logs and diagnostics.
@@ -339,6 +480,8 @@ pub struct AdapterManager {
     stop: Arc<AtomicBool>,
     /// How many adapters were actually started.
     running: usize,
+    /// Last outcome per adapter, shared with the worker threads.
+    statuses: AdapterStatuses,
 }
 
 impl AdapterManager {
@@ -349,7 +492,26 @@ impl AdapterManager {
     /// skipped, and the rest still run.
     pub fn start(registry: Arc<HarnessRegistry>, config: &AdapterConfig) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let statuses: AdapterStatuses = Arc::new(Mutex::new(BTreeMap::new()));
         let mut running = 0;
+
+        // A status entry exists for every configured adapter from the start, so
+        // the window can show a disabled adapter and a not-yet-polled one
+        // instead of an empty list.
+        {
+            let mut map = statuses.lock().unwrap_or_else(|error| error.into_inner());
+            for entry in &config.adapters {
+                map.insert(
+                    entry.name.clone(),
+                    AdapterStatus {
+                        name: entry.name.clone(),
+                        outcome: AdapterOutcome::Pending,
+                        checked_at: None,
+                        succeeded_at: None,
+                    },
+                );
+            }
+        }
 
         for entry in config.enabled() {
             let adapter = match entry.build() {
@@ -363,9 +525,10 @@ impl AdapterManager {
             let interval = entry.interval();
             let registry = Arc::clone(&registry);
             let stop = Arc::clone(&stop);
+            let statuses = Arc::clone(&statuses);
 
             std::thread::spawn(move || {
-                run_adapter(adapter, interval, registry, stop);
+                run_adapter(adapter, interval, registry, stop, statuses);
             });
 
             println!(
@@ -377,7 +540,11 @@ impl AdapterManager {
             running += 1;
         }
 
-        Self { stop, running }
+        Self {
+            stop,
+            running,
+            statuses,
+        }
     }
 
     /// How the manager started, for the startup log.
@@ -395,6 +562,15 @@ impl AdapterManager {
     /// exit path and an explicit shutdown may call it.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// The last outcome of every configured adapter, in configuration order.
+    ///
+    /// Reads the shared map rather than the adapter threads, so it is safe to
+    /// call while they are polling and cannot block on a producer.
+    pub fn statuses(&self) -> Vec<AdapterStatus> {
+        let map = self.statuses.lock().unwrap_or_else(|error| error.into_inner());
+        map.values().cloned().collect()
     }
 }
 
@@ -416,6 +592,7 @@ fn run_adapter(
     interval: Duration,
     registry: Arc<HarnessRegistry>,
     stop: Arc<AtomicBool>,
+    statuses: AdapterStatuses,
 ) {
     // Poll immediately: waiting one interval before the first read would leave
     // the note empty for no reason after a restart.
@@ -424,12 +601,20 @@ fn run_adapter(
             return;
         }
 
+        // Every poll records an outcome, whether it worked or not, so the
+        // management window always shows the latest truth rather than a
+        // success that has since rotted.
         match adapter.poll() {
             Ok(snapshot) => match registry.upsert(snapshot) {
-                Ok(stored) => log_poll(&adapter, &stored.snapshot.harness_id),
+                Ok(stored) => {
+                    let harness_id = stored.snapshot.harness_id.clone();
+                    record_success(&statuses, adapter.name(), &harness_id);
+                    log_poll(&adapter, &harness_id);
+                }
                 Err(error) => {
                     // The adapter produced something the protocol rejects. That
                     // is a producer bug, and the registry is untouched.
+                    record_rejected(&statuses, adapter.name(), &error);
                     eprintln!(
                         "[sticky-harness] adapter {} reported a snapshot the protocol rejected: {error}",
                         adapter.name()
@@ -437,6 +622,7 @@ fn run_adapter(
                 }
             },
             Err(error) => {
+                record_failure(&statuses, adapter.name(), &error);
                 eprintln!(
                     "[sticky-harness] adapter {} poll failed: {error}",
                     adapter.name()
@@ -448,6 +634,52 @@ fn run_adapter(
             return;
         }
     }
+}
+
+/// Update one adapter's status after a good poll.
+fn record_success(statuses: &AdapterStatuses, name: &str, harness_id: &str) {
+    let now = now_millis();
+    let mut map = statuses.lock().unwrap_or_else(|error| error.into_inner());
+    let entry = map.entry(name.to_string()).or_insert_with(|| AdapterStatus {
+        name: name.to_string(),
+        outcome: AdapterOutcome::Pending,
+        checked_at: None,
+        succeeded_at: None,
+    });
+    entry.outcome = AdapterOutcome::Ok {
+        harness_id: harness_id.to_string(),
+    };
+    entry.checked_at = Some(now);
+    entry.succeeded_at = Some(now);
+}
+
+/// Update one adapter's status after a failed poll.
+fn record_failure(statuses: &AdapterStatuses, name: &str, message: &str) {
+    record_problem(statuses, name, AdapterOutcome::Failed {
+        message: message.to_string(),
+    });
+}
+
+/// Update one adapter's status after a snapshot the protocol refused.
+fn record_rejected(statuses: &AdapterStatuses, name: &str, message: &str) {
+    record_problem(statuses, name, AdapterOutcome::Rejected {
+        message: message.to_string(),
+    });
+}
+
+/// Shared tail for the two failure shapes: the attempt is stamped, the last
+/// success is not, so the window can show "never succeeded" separately from
+/// "succeeded, then broke".
+fn record_problem(statuses: &AdapterStatuses, name: &str, outcome: AdapterOutcome) {
+    let mut map = statuses.lock().unwrap_or_else(|error| error.into_inner());
+    let entry = map.entry(name.to_string()).or_insert_with(|| AdapterStatus {
+        name: name.to_string(),
+        outcome: AdapterOutcome::Pending,
+        checked_at: None,
+        succeeded_at: None,
+    });
+    entry.outcome = outcome;
+    entry.checked_at = Some(now_millis());
 }
 
 /// Log the first successful poll of each harness, and then stay quiet.
@@ -497,8 +729,14 @@ pub fn poll_once_for_test(
     registry: Arc<HarnessRegistry>,
     _stop: Arc<AtomicBool>,
 ) {
+    let statuses: AdapterStatuses = Arc::new(Mutex::new(BTreeMap::new()));
     if let Ok(snapshot) = adapter.poll() {
-        let _ = registry.upsert(snapshot);
+        match registry.upsert(snapshot) {
+            Ok(stored) => record_success(&statuses, adapter.name(), &stored.snapshot.harness_id),
+            Err(error) => record_rejected(&statuses, adapter.name(), &error),
+        }
+    } else {
+        record_failure(&statuses, adapter.name(), "poll failed");
     }
 }
 
@@ -516,4 +754,11 @@ pub fn load_config_for(app: &AppHandle) -> AdapterConfig {
             AdapterConfig::default()
         }
     }
+}
+
+/// The checked counterpart of [`load_config_for`], for surfaces that can show a
+/// reason. A missing file is still not a problem: it means no adapters.
+pub fn load_checked_for(app: &AppHandle) -> Result<AdapterConfig, AdapterConfigError> {
+    let path = config_path(app)?;
+    load_checked(&path)
 }

@@ -767,6 +767,10 @@ pub fn show_all_notes(app: &AppHandle) -> Result<usize, String> {
         shown += 1;
     }
 
+    if crate::harness::adapters_window::show_if_open(app) {
+        shown += 1;
+    }
+
     // Focus one note so the click has a visible result even if the notes were
     // already on screen.
     if let Some(window) = app
@@ -800,6 +804,10 @@ pub fn hide_all_notes(app: &AppHandle) -> Result<usize, String> {
     }
 
     if crate::harness_window::hide_if_open(app) {
+        hidden += 1;
+    }
+
+    if crate::harness::adapters_window::hide_if_open(app) {
         hidden += 1;
     }
 

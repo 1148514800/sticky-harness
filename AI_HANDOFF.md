@@ -54,6 +54,10 @@ is local: no account, no sync, no server.
   into the registry through the very same `HarnessSnapshot` validation the
   push endpoint uses. An adapter is a *source*, never a path into the app: it
   cannot write notes or reach the network beyond `127.0.0.1`.
+  `harness/adapters_window.rs` is the config surface in front of that: it renders
+  the configuration joined with the last health reading, and every mutation it
+  offers re-validates the whole resulting configuration before writing the file,
+  so the window cannot save what the startup path would refuse.
 - **Liveness is local**: `harness/registry.rs` decides what is alive, and the
   only input is the local clock reading of the last time a snapshot actually
   *changed*. Nothing compares a producer's clock with ours, so a producer
@@ -135,14 +139,107 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 6 — Harness Adapters
+Phase 7 — Adapter Management / Product Polish
 
 Status: Completed
 
 Done:
 
+- Phases 1 to 6: sticky notes, Markdown editing, desktop experience, the local
+  harness protocol, the Harness Task Note and the harness adapters. See 4b and
+  4c below.
+- **Adapters no longer need a hand-edited file.** Tray -> Harness Adapters opens
+  one singleton window listing every configured adapter with its name, type,
+  source, enabled state and last status. It can add a local JSON or local HTTP
+  adapter, edit one including renaming it, enable or disable it, delete it and
+  reload the file. The format of `<AppData>/harness-adapters.json` is unchanged;
+  it is still the contract, and the window is just another writer of it.
+- **The window asks, Rust decides.** Every mutation runs the same
+  `AdapterConfig::validate` the startup path uses, against the whole resulting
+  configuration, before anything is written. A rejected edit returns its reason
+  to the window, leaves the file on disk exactly as it was, and leaves every
+  other adapter running. An add whose name is already taken is refused rather
+  than silently overwriting an adapter the add form cannot see.
+- **A rename is an edit, not an add.** `save_adapter` takes the adapter's
+  previous name, so changing a name replaces the entry in place instead of
+  leaving the old one behind - the one way this window could have quietly
+  doubled a configuration.
+- **Applying a configuration replaces the running set in one step.**
+  `HarnessState::apply_adapter_config` stops the previous workers and starts the
+  new set; the file is written before the adapters restart, so a write failure
+  leaves the running set untouched rather than applying something that is not on
+  disk. Add, edit, delete, enable, disable and reload all go through it, so they
+  inherit the startup rule that one bad adapter never stops the others.
+- **Each adapter reports a last outcome.** `AdapterStatus` / `AdapterOutcome`
+  live in memory only and are one line per adapter: `ok` with the harness id it
+  reported, `error` with the producer's message, `rejected` when the producer
+  sent something the protocol refused, `waiting` before the first poll, or
+  `off` while the adapter is disabled. There
+  is no history and no log to read - the Harness Task Note still answers "what is
+  running", and the window answers only "is this source healthy".
+- **Reload is the escape hatch for hand-editing.** The file remains editable in
+  any text editor; Reload re-reads and validates it and restarts the adapters
+  without a restart of the app.
+- **A broken file says so.** `load_checked_for` is what the window reads
+  through, so a `harness-adapters.json` that does not parse, or that fails
+  validation, is reported in the window with its real reason instead of rendering
+  as an empty list that looks like "no adapters configured". Startup keeps the
+  lenient behaviour: it logs the reason and runs with no adapters, because
+  harness reporting must never stop notes or the tray.
+- **Exit needed no change.** The Rust exit path was re-measured and finishes in
+  about 34 ms; the remaining latency is Windows/Tauri/WebView2 teardown that no
+  adapter affects, and `EXIT_FLUSH_TIMEOUT` stays at 1500 ms so the last
+  keystroke is still saved reliably. See Known Issues for the measurements.
+
+Codex integration mode: Bridge
+
+DeepSeek integration mode: Bridge
+
+Unchanged from Phase 6: both harnesses are supported through the standard push
+and pull paths, and neither gets a Direct adapter. The reasoning is in 4c.
+
+Not done (intentionally, do not start without a new task):
+
+- Settings UI beyond adapters: themes, images, search. No dashboard, no task
+  history, no log, no terminal and no tool-call view in the adapter window.
+- Codex or DeepSeek control, prompt sending, any remote network access, SQLite,
+  cloud, authentication, WebSocket or SSE. Local HTTP still means loopback only.
+- Per-adapter SDKs, a plugin loader or a scripting host. Two adapters, one trait,
+  one manager and one registry remain the whole abstraction.
+
+## 4b. Phase 4 — Harness Protocol (Completed)
+
+Done:
+
+- A vendor-neutral protocol for "what is this harness running":
+  `HarnessSnapshot` / `HarnessTask` / `HarnessStatus`, defined in
+  `harness/protocol.rs` with no reference to any real harness.
+- A status enum of `running`, `waiting`, `failed`, `completed`, `cancelled` and
+  `unknown`. `unknown` exists only so a future adapter can report a producer
+  state it cannot map without inventing a more flattering answer.
+- `HarnessStatus::is_active()` is the single definition of "in progress":
+  running and waiting. Phase 5 must ask this rather than reimplementing it.
+- `HarnessRegistry` holds the latest snapshot per harness in memory, keyed by
+  `harness_id`, so a harness that reports again is updated and never duplicated.
+- A local push endpoint on `127.0.0.1:17899` accepts snapshots over HTTP:
+  `GET /health`, `POST /api/harness/snapshot`, `GET /api/harness/snapshots`.
+- Validation rejects empty or oversized ids, empty names, empty titles,
+  unknown statuses, malformed timestamps, `updated_at` before `started_at`,
+  duplicate task ids, more than 256 tasks and bodies over 256 KB.
+- Staleness is computed, never assumed, from the app's own clock: a snapshot
+  is stale when `now - received_at` passes the timeout. Phase 4 used the
+  producer's `updated_at` as well; Phase 6 removed that, because it made
+  staleness depend on the producer's clock agreeing with ours (see 4c).
+  Nothing is deleted on staleness.
+- The registry is deliberately not persisted. Harness state describes live
+  processes, so an empty registry after a restart is the truth.
+
+## 4c. Phase 6 — Harness Adapters (Completed)
+
+Done:
+
 - Phases 1 to 5: sticky notes, Markdown editing, desktop experience, the local
-  harness protocol and the Harness Task Note. See 4b and 4c below.
+  harness protocol and the Harness Task Note. See 4b below.
 - Something finally produces the state the app displays. Two adapters poll a
   harness's own status document and report it through the existing protocol:
   `LocalJsonAdapter` reads a JSON file, `LocalHttpAdapter` reads a loopback
@@ -212,40 +309,14 @@ running right now":
 - No equivalent stable status source was found for DeepSeek, so no specialised
   adapter was written for it either.
 
-Not done (intentionally, do not start without a new task):
+Not done at the time (Phase 7 added the adapter management surface):
 
-- Settings UI, adapter management UI, and any adapter editing outside the JSON
-  file. A malformed or missing configuration is logged, not surfaced in UI.
+- An adapter management UI and editing outside the JSON file. Phase 6 logged a
+  malformed or missing configuration instead of surfacing it; Phase 7 is where
+  both changed.
 - Codex or DeepSeek control, prompt sending, task history, logs, tool calls, a
   terminal view, search, notifications, SQLite, cloud, authentication,
   WebSocket, SSE, and any remote network access. Local HTTP means loopback only.
-
-## 4b. Phase 4 — Harness Protocol (Completed)
-
-Done:
-
-- A vendor-neutral protocol for "what is this harness running":
-  `HarnessSnapshot` / `HarnessTask` / `HarnessStatus`, defined in
-  `harness/protocol.rs` with no reference to any real harness.
-- A status enum of `running`, `waiting`, `failed`, `completed`, `cancelled` and
-  `unknown`. `unknown` exists only so a future adapter can report a producer
-  state it cannot map without inventing a more flattering answer.
-- `HarnessStatus::is_active()` is the single definition of "in progress":
-  running and waiting. Phase 5 must ask this rather than reimplementing it.
-- `HarnessRegistry` holds the latest snapshot per harness in memory, keyed by
-  `harness_id`, so a harness that reports again is updated and never duplicated.
-- A local push endpoint on `127.0.0.1:17899` accepts snapshots over HTTP:
-  `GET /health`, `POST /api/harness/snapshot`, `GET /api/harness/snapshots`.
-- Validation rejects empty or oversized ids, empty names, empty titles,
-  unknown statuses, malformed timestamps, `updated_at` before `started_at`,
-  duplicate task ids, more than 256 tasks and bodies over 256 KB.
-- Staleness is computed, never assumed, from the app's own clock: a snapshot
-  is stale when `now - received_at` passes the timeout. Phase 4 used the
-  producer's `updated_at` as well; Phase 6 removed that, because it made
-  staleness depend on the producer's clock agreeing with ours (see 4c).
-  Nothing is deleted on staleness.
-- The registry is deliberately not persisted. Harness state describes live
-  processes, so an empty registry after a restart is the truth.
 
 ## 5. Important Files
 
@@ -253,6 +324,7 @@ Done:
 src/App.tsx                           Picks the view from this window label
 src/windows/NoteWindow.tsx            One note: + button, Pin, autosave
 src/windows/HarnessTaskWindow.tsx     Read-only task view, polls once a second
+src/windows/AdaptersWindow.tsx        Adapter rows + add/edit form, polls every 2s
 src/components/HarnessTaskList.tsx    Renders harness groups, tasks, empty state
 src/harness/elapsed.ts                MM:SS / H:MM:SS elapsed formatting
 src/harness/grouping.ts               Groups live tasks by harness, Core order
@@ -276,8 +348,10 @@ src-tauri/src/harness/registry.rs     In-memory snapshots and active filtering
 src-tauri/src/harness/server.rs       Loopback-only push endpoint
 src-tauri/src/harness/adapter.rs      HarnessAdapter trait + LocalJson/LocalHttp
 src-tauri/src/harness/manager.rs      AdapterManager: config, workers, isolation
+src-tauri/src/harness/adapters_window.rs  Adapter Management window + its commands
 src-tauri/src/harness/tests.rs        Core tests (validation, registry, stale)
-src-tauri/capabilities/default.json   Core permissions for note-* and harness-tasks
+src-tauri/capabilities/default.json   Core permissions for note-*, harness-tasks,
+                                      harness-adapters
 src-tauri/tauri.conf.json             No startup window; notes created by Rust
 ```
 
@@ -317,6 +391,15 @@ src-tauri/tauri.conf.json             No startup window; notes created by Rust
 - Show All and Hide All cover the Harness Task Note too. Hiding it deletes
   nothing and changes no registry state; showing it never creates it if it was
   never opened.
+- Tray -> Harness Adapters opens one Adapter Management window listing every
+  configured adapter with its name, type, source, enabled state and last status.
+  It can add, edit, rename, enable, disable, delete and reload adapters; a
+  refused edit shows the reason and changes nothing. Closing the window hides
+  it, Show All / Hide All include it, and the tray item reopens the same window
+  rather than creating a second one.
+- A disabled adapter is a real stop, not a filtered view: its worker leaves and
+  its snapshot ages out through the normal staleness rule. Enabling it again
+  starts it immediately.
 - Tray Exit quits the process and keeps every note file, including notes that
   were hidden.
 - A local harness can POST its current state to
@@ -610,7 +693,9 @@ J  Regression         PASS  with adapters running: a new note saved Markdown to
                             and the adapters still polling, Show All returned
                             all 3, and Tray Exit quit in 3.85 s with no
                             adapter log line afterwards and both note files
-                            intact
+                            intact (Phase 7 later measured this as Windows/
+                            WebView2 teardown, not adapter cost - see Known
+                            Issues)
 K  Shipping state     PASS  with the fixtures removed and
                             `harness-adapters.json` back to
                             `{ "adapters": [] }`, startup logs "no harness
@@ -621,6 +706,74 @@ K  Shipping state     PASS  with the fixtures removed and
 ```
 Codex integration mode: Bridge
 DeepSeek integration mode: Bridge
+```
+
+Re-run for Phase 7, which adds the Adapter Management window, its commands and
+the per-adapter status surface:
+
+```
+npm test                  PASS  85 tests (5 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo test                PASS  114 tests (validation, registry, staleness,
+                                adapters, manager config, adapter window)
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
+```
+
+Phase 7 (Adapter Management), run against a live build through the real UI over
+the WebView2 CDP endpoint plus real tray clicks. Fixtures and the temporary
+loopback bridge lived outside the repo in %TEMP%\sh-verify; the shipping
+`harness-adapters.json` was restored to `{ "adapters": [] }\n` afterwards:
+
+```
+1  Add Local JSON      PASS  added through the window; status went ok and the
+                            harness appeared in the Harness Tasks window
+2  Disable             PASS  status off and the row stayed; the manager
+                            reported running: 0, so it is a real stop and not a
+                            filter over a still-polling adapter
+3  Enable              PASS  recovered to ok on its first new poll, no restart
+4  Edit path           PASS  one row after the edit (no duplicate), and the new
+                            harness id was picked up from the new file
+5  Add Local HTTP      PASS  source shown as
+                            http://127.0.0.1:18001/api/harness/snapshot
+6  Invalid configs     PASS  refused with a message and the file untouched:
+                            "adapter 2: local-http needs a port",
+                            "http_path must start with '/'", and a duplicate
+                            name; the duplicate case initially overwrote the
+                            existing adapter and was fixed to refuse instead
+7  Delete              PASS  row gone and the file updated
+8  Restart             PASS  adapters came back from the file with no UI help
+9  One adapter fails   PASS  an HTTP 500 made that row error with the
+                            producer's detail while the other stayed ok; both
+                            last-good snapshots stayed in the registry, and the
+                            failing one recovered to ok without a restart
+10 Reload              PASS  a hand-edited file picked up a new adapter and a
+                            disabled one without a restart
+11 Regression          PASS  with adapters running: a normal note saved its
+                            Markdown to disk, the Harness Task Note stayed live,
+                            Hide All returned 3 and left 0 visible with the tray
+                            alive, Show All returned all 3, and Tray Exit quit
+                            with both note files intact
+```
+
+Exit latency (Phase 7 investigation; the Phase 6 note of 3.85 s was this
+teardown, not an adapter cost):
+
+```
+Rust exit sequence     PASS  exit_app -> flush done -> app.exit(0) ->
+                            ExitRequested -> stop_adapters -> Exit all completed
+                            in ~34 ms after the tray click
+Truly-gone timing      PASS  0 adapters ~2.0 s; 3 adapters ~1.9-2.0 s; an HTTP
+                            adapter blocked mid-request ~2.1 s
+Per-window teardown    PASS  notes only ~1.9-2.1 s; adding any second window
+                            (adapter window or Harness Tasks) ~3.2-3.6 s, i.e.
+                            ~1 s per WebView2 window
+app.run() return       PASS  never printed while the process still ended with
+                            exit code 0, so the delay is Windows/Tauri/WebView2
+                            teardown after RunEvent::Exit
+Decision               N/A   accepted as environmental; the Exit path and
+                            EXIT_FLUSH_TIMEOUT = 1500 ms are unchanged
 ```
 
 ## 8. Known Issues
@@ -635,7 +788,8 @@ DeepSeek integration mode: Bridge
   aborted before it ever loaded a task. The window looked permanently empty
   while the registry held the data. `core:window:default` contains neither
   permission, and a new window label must be added to the capability before any
-  of its APIs work.
+  of its APIs work. Phase 7 is the third time: `harness-adapters` had to be
+  added to `windows` or the window's commands would have been denied.
 - **An `os error 32` read race was observed once during runtime verification,**
   but repeated `create -> immediate get_note` checks could not reproduce it.
   Fifteen serial runs (6 + 10) of create-then-read all succeeded. Persistence
@@ -688,7 +842,8 @@ DeepSeek integration mode: Bridge
   is not a security model for untrusted local code.
 - **`HARNESS_API_PORT` is a fixed constant (17899).** If it is taken the app
   logs the failure and runs without the harness API. There is no fallback port
-  and no settings screen yet, by design.
+  and no UI to change it: the Adapter Management window edits adapters, not the
+  app's own push listener, and the port is a constant by design.
 - **The HTTP parser is deliberately minimal.** It handles a single request per
   connection with `Connection: close` and reads only `Content-Length`. A
   `Transfer-Encoding: chunked` body is not supported, because a local snapshot
@@ -724,12 +879,24 @@ DeepSeek integration mode: Bridge
 - **`local-http` accepts only a `Content-Length` body.** A chunked response is
   not supported, for the same reason the push endpoint does not parse chunked
   requests: a local snapshot does not need it.
-- **`harness-adapters.json` is hand-edited and has no UI.** An unknown key, a
-  duplicate name, a bad kind or an out-of-range value is logged and the whole
-  file is rejected, so the app starts with no adapters rather than a partial
-  set. There is no settings screen, no validation feedback in the UI and no
-  reload without a restart - extending the running configuration is Phase 7's
-  problem.
+- **`harness-adapters.json` is still the contract, and the window is another
+  writer of it.** An unknown key, a duplicate name, a bad kind or an
+  out-of-range value is logged and the whole file is rejected at startup, so the
+  app starts with no adapters rather than a partial set. The Adapter Management
+  window cannot produce such a file: every edit re-validates the whole resulting
+  configuration in Rust before writing, and a rejected edit leaves the previous
+  file on disk. The staleness of this line at startup is still the file being
+  hand-edited outside the app - use Reload, or restart, to pick that up.
+- **Adapter status is in-memory and last-write-only.** `AdapterStatus` keeps one
+  outcome per adapter and no history, and it is rebuilt empty on every
+  configuration change, so a reload or an edit shows `waiting` until the first
+  new poll. It is deliberately not a log: adding per-poll history would turn a
+  settings window into the task-log surface this project keeps refusing.
+- **A configuration change stops and restarts every adapter.** Add, edit,
+  delete, enable, disable and reload all replace the whole running set through
+  `apply_adapter_config`, even when only one adapter changed. That is what keeps
+  one code path for validation and isolation; the cost is one dropped poll for
+  the untouched adapters, and their last-good snapshots stay in the registry.
 - **An adapter can only ever add harness state, never inspect the app.** It
   writes into `HarnessRegistry` through the same validated `HarnessSnapshot`
   contract as the push endpoint, so an adapter cannot create a note, touch
@@ -739,27 +906,50 @@ DeepSeek integration mode: Bridge
   only thing keeping a 5-minute poll interval from delaying the tray; it costs
   a wakeup every 50 ms per adapter, which is irrelevant at this scale but should
   be revisited if adapters ever became numerous.
+- **Tray Exit spends about 2 s in Windows/Tauri/WebView2 teardown, and that is
+  environmental, not this app's exit path.** Measured with
+  `GetExitCodeProcess` polling rather than window disappearance, the whole Rust
+  exit sequence - `exit_app`, the note flush, `app.exit(0)`, `ExitRequested`,
+  `stop_adapters`, `Exit` - finishes about 34 ms after the tray click.
+  Time-to-gone is then ~2.0 s with no adapters, ~1.9-2.0 s with three, and
+  ~2.1 s with an HTTP adapter blocked mid-request, so adapters do not contribute.
+  A second window costs about another second (~3.2-3.6 s with the adapter window
+  or the Harness Task Note open), which is where the Phase 6 figure of 3.85 s
+  came from. A line placed after `app.run()` never printed while the process
+  still ended with exit code 0, so `app.run()` does not return normally: the
+  process is terminated during teardown, after `RunEvent::Exit`. A deliberately
+  minimal Tauri 2 app with one window behaves the same on this machine.
+- **`EXIT_FLUSH_TIMEOUT` stays at 1500 ms.** The exit path was deliberately left
+  unchanged: 1.5 s is the budget for the last unsaved keystroke, and trading it
+  for a smaller teardown number would risk losing input to save time the app
+  does not control. Do not shorten it to chase the teardown.
 
 ## 9. Next Step
 
-Next: Phase 7 — Adapter Management / Product Polish
+Next: Phase 8 — Codex / Harness Bridge Experience
 
-Phase 6 is done: harness state is produced by real adapters, not by hand, and
-the stale rule is finally honest about what it measures.
+Phase 7 is done: adapters are configured from a real window, every edit goes
+through the same Rust validation the startup path uses, one bad adapter still
+cannot stop the others, and a hand-edited file can be reloaded without a
+restart. The exit path was investigated and deliberately left alone, because
+the remaining latency is Windows/Tauri/WebView2 teardown rather than anything
+this app controls.
 
-What Phase 6 deliberately left alone, and what Phase 7 is for:
+What Phase 7 deliberately left alone, and what Phase 8 is for:
 
-- Adapters are configured by hand-editing `<AppData>/harness-adapters.json`.
-  There is no UI, no validation feedback and no reload without a restart. A
-  Phase 7 can add a management surface and a live reload while keeping the file
-  format as the contract.
-- Nothing about `HarnessAdapter` needs redesigning to do that. An adapter is
-  still one trait, two implementations, one manager, one registry. Do not add a
-  second abstraction, a plugin loader, a scripting host or per-adapter SDKs.
+- Someone still has to write the bridge. A Codex or DeepSeek user must produce
+  a JSON file, serve a loopback endpoint, or POST to `/api/harness/snapshot`
+  themselves, and there is no shipped, documented, runnable example of either.
+  Phase 8 is where a bridge becomes a thing a user can actually run and be told
+  how to run honestly - still without the app controlling any harness.
+- The route stays Bridge for both harnesses. Do not re-open Direct until one of
+  them publishes a stable, documented, read-only "currently running" source;
+  `state_5.sqlite` holds session metadata only and `codex app-server` was not
+  reachable here (see 4c). Parsing an internal cache to invent a status would be
+  a regression dressed up as a feature.
 - The remaining product polish from earlier phases is still open: images,
-  themes, search and a settings window. The adapter management surface is the
-  natural place to put the harness settings, and the two should not become two
-  separate screens.
+  themes, search and a settings window. The adapter window is a settings
+  surface the real settings window should absorb rather than sit beside.
 
 Still out of scope, and still worth refusing:
 
@@ -767,10 +957,8 @@ Still out of scope, and still worth refusing:
   SQLite, no cloud, no authentication, no WebSocket or SSE.
 - No remote network. `local-http` means loopback, and it should keep meaning
   loopback.
-- Still no Direct Codex or DeepSeek adapter. The conclusion stands until one of
-  them publishes a stable, documented, read-only "currently running" source;
-  until then Bridge is the honest answer, and a fake Direct adapter would be a
-  regression dressed up as a feature.
+- No Codex or DeepSeek control, and no prompt sending. The app reports; it does
+  not drive anything.
 
 ## 10. Latest Commit
 
@@ -778,26 +966,26 @@ Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
 `main`). Local commits only; nothing has been pushed.
 
 ```
-cd92869 docs: record the Phase 4 commit in the handoff
-eeb5353 feat: add local harness protocol                (Phase 4)
-06dbf5b docs: record the Phase 3 commit in the handoff
-c2ef7e7 feat: improve desktop note experience           (Phase 3)
-8d83a70 fix: complete markdown note runtime behavior    (Phase 2 closeout)
-c1c1f85 docs: record Phase 2 commit in handoff
 2c8c872 feat: edit notes as markdown with todos         (Phase 2)
-
-7fa106b feat: add harness task note                   (Phase 5)
+c1c1f85 docs: record Phase 2 commit in handoff
+8d83a70 fix: complete markdown note runtime behavior    (Phase 2 closeout)
+c2ef7e7 feat: improve desktop note experience           (Phase 3)
+06dbf5b docs: record the Phase 3 commit in the handoff
+eeb5353 feat: add local harness protocol                (Phase 4)
+cd92869 docs: record the Phase 4 commit in the handoff
+7fa106b feat: add harness task note                     (Phase 5)
 b70e5a6 docs: record the Phase 5 commit in the handoff
-
-756386e feat: add harness adapters                    (Phase 6)
+756386e feat: add harness adapters                      (Phase 6)
 393aef5 docs: record the Phase 6 commit in the handoff
+f607205 docs: record the Phase 6 docs commit hash
+<PHASE7_HASH> feat: add adapter management              (Phase 7)
 ```
 
-Every commit is local. Nothing has been pushed. Phase 6 adds the adapters:
-`harness/manager.rs` (config, workers, failure isolation, shutdown),
-`harness/adapter.rs` (the `HarnessAdapter` trait plus `LocalJsonAdapter` and
-`LocalHttpAdapter`), the config path in `paths.rs`, `start_adapters` and
-`stop_adapters` in `harness/mod.rs`, the Exit wiring in `lib.rs`, and the
-clock-independent stale rule in `protocol.rs` / `registry.rs`. No existing
-commit was rewritten or squashed.
-
+Every commit is local. Nothing has been pushed. Phase 7 adds the Adapter
+Management window and its commands: `harness/adapters_window.rs` (the window,
+its commands and the validate-then-save-then-apply rule),
+`AdaptersWindow.tsx` plus its styles and command wrappers, the `AdapterStatus`
+/ `AdapterOutcome` surface and `save_config` in `harness/manager.rs`,
+`apply_adapter_config` in `harness/mod.rs`, the tray item in `tray.rs`, and
+the `harness-adapters` capability. `EXIT_FLUSH_TIMEOUT` and the exit path are
+untouched. No existing commit was rewritten or squashed.
