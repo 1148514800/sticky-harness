@@ -978,7 +978,7 @@ b70e5a6 docs: record the Phase 5 commit in the handoff
 756386e feat: add harness adapters                      (Phase 6)
 393aef5 docs: record the Phase 6 commit in the handoff
 f607205 docs: record the Phase 6 docs commit hash
-<PHASE7_HASH> feat: add adapter management              (Phase 7)
+8fc785c feat: add adapter management              (Phase 7)
 ```
 
 Every commit is local. Nothing has been pushed. Phase 7 adds the Adapter
