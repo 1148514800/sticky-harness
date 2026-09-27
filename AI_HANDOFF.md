@@ -139,9 +139,90 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 7 — Adapter Management / Product Polish
+Phase 8 — Codex / Harness Bridge Experience
 
 Status: Completed
+
+Done:
+
+- Phases 1 to 7: sticky notes, Markdown editing, desktop experience, the local
+  harness protocol, the Harness Task Note, the harness adapters and the Adapter
+  Management window. See 4b, 4c and 4d below.
+- **A harness can report in three commands.** `sticky-harness-bridge` is a
+  zero-dependency Node CLI (`bin/sticky-harness-bridge.mjs`) over a pure,
+  I/O-free module (`src/harness/bridge.ts`). `start`, `update`, `done`, `fail`
+  and `cancel` all end in one place: one `HarnessSnapshot` POSTed to
+  `127.0.0.1:17899/api/harness/snapshot`. It is a *producer*, so it added no
+  abstraction - the protocol, the registry, the push endpoint, the adapters and
+  the Harness Task Note are untouched.
+- **Node rather than Rust, on purpose.** The project already needs Node to be
+  built and run, so a script costs no second toolchain, no second build step and
+  no second artifact. Its whole dependency list is `node:http`, `node:fs`,
+  `node:os` and `node:path`; Node 24 strips the types from the `.ts` module it
+  imports directly, so the tested logic and the running code are the same code.
+  The split follows the seam: the *app* is Rust because it owns windows, the
+  tray and lifetimes, while a *reporter* that talks to a loopback endpoint is a
+  script.
+- **One generic bridge, never one per vendor.** The only inputs that distinguish
+  a harness are `harness id/name`, `task id/title` and `status`. There is no
+  `CodexBridge`, no `DeepSeekBridge`, no `MyBotBridge` and no SDK; a new harness
+  is a command, not a code path. A vendor-specific bridge would mean the
+  protocol had learned about vendors, which is what the protocol exists to
+  prevent.
+- **One task, one stable id.** `start` writes a five-field session file
+  (harness, task id, title, status, message) under `<user profile>\.sticky-harness\`,
+  and every later call reads it, so no call can fork a second row. The id is
+  derived once from the title (`Refactor runtime` -> `refactor-runtime`) and
+  then never recomputed, so `update --title` renames the row rather than moving
+  it. `start` over a live task warns on stderr and replaces it; the warning
+  exists because a replaced task is otherwise invisible.
+- **A finished task leaves no session behind.** `done`, `fail` and `cancel`
+  report a terminal status and then delete the session file, so a later `update`
+  answers "no current task" instead of inventing one. Terminal statuses are
+  never active, so the row leaves the Harness Tasks window on the next refresh
+  while the snapshot stays in the registry like any other finished task.
+- **The bridge only reports.** It never starts, stops or prompts a harness,
+  never reads a conversation or a harness's own files, never writes a note and
+  never kills an agent. It sends what you told it and nothing else.
+- **Failure is one readable sentence.** A refused connection, an unusable
+  endpoint and an unanswered request each become a specific line on stderr with
+  a non-zero exit - `nothing is listening on 127.0.0.1:17899; start Sticky
+  Harness first` - and leave no partial state, because the session file is
+  written only after the app has accepted the snapshot. A snapshot the app
+  *refuses* is reported with the validator's own reason, passed through rather
+  than paraphrased.
+- **Two wrappers, no SDK.** `examples/run-task.ps1` (a `-Work` scriptblock) and
+  `examples/run-task.sh` report a start, run one command and report the outcome
+  - including a failure - so a crashed run cannot leave a task sitting in the
+  window. They are examples to copy, not an integration to install.
+- **`npm run bridge`** is the in-repo entry point; `node
+  bin/sticky-harness-bridge.mjs` works anywhere. `--dry-run` prints the snapshot
+  and sends nothing, and `--json` echoes what was sent, so the bridge can be
+  checked without a running app.
+
+Codex integration mode: Bridge
+
+DeepSeek integration mode: Bridge
+
+Both stay on the standard push and pull paths, and neither gets a Direct
+adapter. The investigation is unchanged from 4c: Codex's `state_5.sqlite` holds
+thread and session metadata but no stable current-running-task state, and
+`codex app-server` was not reachable here, so an adapter built on it could only
+report guesses; DeepSeek exposes no stable read-only status source either. The
+bridge above is the documented, runnable way both are reached, and it reads
+neither harness's private state. Do not re-open Direct until one of them
+publishes a documented, read-only "currently running" source.
+
+Not done (intentionally, do not start without a new task):
+
+- No automatic parsing of any harness's internal database, cache or session
+  store.
+- No Settings expansion, no task history, no log or terminal view, no harness
+  control, no prompt sending, no cloud, no SQLite and no remote API.
+- No SDK, plugin loader or scripting host. One bridge, one protocol, and the
+  same two adapters remain the whole integration surface.
+
+## 4d. Phase 7 — Adapter Management / Product Polish (Completed)
 
 Done:
 
@@ -335,6 +416,8 @@ src/editor/links.ts                    Which clicks open a link, and which URLs
 src/services/desktop.ts                Typed wrappers over the Rust note commands
 src/types/desktop.ts                  NoteRecord/NoteWindowState + label parsing
 src/utils/logger.ts                   Console logging helpers
+src/harness/bridge.ts                 Bridge logic: args, session, snapshot (pure)
+src/harness/bridge.test.ts            Its tests; no I/O, no clock, no argv
 src/styles.css                        Minimal note styling
 
 src-tauri/src/lib.rs                  Setup, command registration, exit veto
@@ -353,6 +436,9 @@ src-tauri/src/harness/tests.rs        Core tests (validation, registry, stale)
 src-tauri/capabilities/default.json   Core permissions for note-*, harness-tasks,
                                       harness-adapters
 src-tauri/tauri.conf.json             No startup window; notes created by Rust
+bin/sticky-harness-bridge.mjs         The bridge CLI: session file + one POST
+examples/run-task.ps1                 Report, run one command, report the outcome
+examples/run-task.sh                  The same wrapper for sh
 ```
 
 ## 6. Current Behavior
@@ -404,8 +490,13 @@ src-tauri/tauri.conf.json             No startup window; notes created by Rust
   were hidden.
 - A local harness can POST its current state to
   `http://127.0.0.1:17899/api/harness/snapshot` and the app remembers it in
-  memory; `GET /api/harness/snapshots` reads it back. Nothing about this is
-  persisted, and nothing is shown in the UI yet.
+  memory; `GET /api/harness/snapshots` reads it back, and the Harness Task
+  Note displays what is active. Nothing about it is persisted.
+- `sticky-harness-bridge start|update|done|fail|cancel` reports the current
+  task from any harness as that same POST. One task at a time, one stable id
+  across calls, and a session file that is deleted when the task finishes; the
+  bridge never reads a harness or drives it. A task reports as live for about
+  five minutes after its last call, so a long task should call `update`.
 - A task stops being listed when its harness goes quiet for longer than the
   stale timeout (5 minutes by default). The snapshot is not deleted, so the next
   report restores the row.
@@ -776,6 +867,103 @@ Decision               N/A   accepted as environmental; the Exit path and
                             EXIT_FLUSH_TIMEOUT = 1500 ms are unchanged
 ```
 
+Re-run for Phase 8, which adds the bridge:
+
+```
+npm test                  PASS  127 tests (6 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo test                PASS  114 tests (validation, registry, staleness,
+                                adapters, manager config, adapter window)
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
+```
+
+`npm test` covers `src/harness/bridge.test.ts` (42 tests) alongside the
+Markdown, todo, link, elapsed and grouping suites. The bridge module is pure -
+no I/O, no clock read, no `process.argv` - which is what lets the argument
+parser, the session transitions and the snapshot construction all be tested
+directly; the CLI file is the only part that touches the disk or the network,
+and it does as little as possible.
+
+Phase 8 (Harness Bridge), run against a live build through the real CLI, the
+WebView2 CDP endpoint and real tray clicks. Every bridge run used `--state-dir`
+under `%TEMP%\sh-verify`, fixtures and the loopback producer lived outside the
+repo, and the shipping `harness-adapters.json` was restored to
+`{ "adapters": [] }` afterwards:
+
+```
+1  start -> window    PASS  one row appeared: Codex / Refactor runtime /
+                            Waiting / 00:12 / Running tests
+2  update             PASS  --message and --title both changed the row in place
+3  running <-> wait   PASS  both directions, same row, same id
+4  done               PASS  live count 0 and the snapshot kept as completed
+5  fail / cancel      PASS  reported failed and cancelled; both left the live
+                            view while their snapshots stayed in the registry
+6  Two harnesses      PASS  codex (running) and deepseek (waiting) at once,
+                            liveCount 2, each with its own stable task id
+7  App not running    PASS  exit 1 with "nothing is listening on
+                            127.0.0.1:17899; start Sticky Harness first"; no
+                            crash, no session file written
+8  Stable id          PASS  the id stayed refactor-runtime across every update;
+                            one harness stayed one row, never two
+9  No current task    PASS  update and done after a finish both answered
+                            "no current task for ..." with exit 1
+10 Replace warning    PASS  start over a live task warned on stderr and
+                            replaced it
+11 Restart recovery   PASS  after restarting the app the registry was empty
+                            (it is in-memory by design); running start again
+                            restored the row
+12 PS example         PASS  examples/run-task.ps1 -Work { ... } reported the
+                            start, ran the work and reported completed
+13 Bad input          PASS  an unreachable port, a malformed --endpoint, a
+                            timeout from a socket that never answers (clear
+                            error, exit 1), an unknown status and a --status on
+                            done all failed cleanly with one readable line
+14 --dry-run          PASS  printed the snapshot, sent nothing, left the state
+                            dir untouched
+15 HTTP adapter       PASS  added through the Adapter Management window
+                            alongside the bridge; both sources showed in Harness
+                            Tasks at the same time
+16 Disable / enable   PASS  disabling stopped updates and enabling resumed them
+                            with no restart
+17 Isolation          PASS  killing the HTTP producer made only that row error
+                            ("connection timed out") while the JSON adapter
+                            stayed ok; restarting the producer recovered it
+18 Invalid config     PASS  an empty path was refused with "adapter 2: path must
+                            not be empty", the file on disk was untouched, the
+                            other adapters kept running and the app did not
+                            crash
+19 Restart refill     PASS  both adapters refilled the registry on their first
+                            ticks after a restart
+20 Regression         PASS  with the bridge and an adapter running: a normal
+                            note saved its Markdown to disk, the Harness Task
+                            Note stayed live, Hide All left every window hidden
+                            with the tray alive, Show All restored them, and
+                            Tray Exit quit with the note files intact
+21 Exit timing        PASS  one window with a JSON adapter and bridge snapshots
+                            present: gone in 2039 ms; with the adapter window
+                            and the Harness Task Note also open: 3843 ms and
+                            3905 ms - i.e. the documented ~2 s teardown plus
+                            ~1 s per extra WebView2 window, so the bridge adds
+                            nothing to Exit
+22 Shipping state     PASS  fixtures removed, harness-adapters.json back to
+                            { "adapters": [] }, notes directory back to the
+                            user's own note
+```
+
+```
+Codex integration mode: Bridge
+DeepSeek integration mode: Bridge
+```
+
+A `typecheck` failure that `vitest` could not catch was found during this
+phase's quality gate: one test narrowed `parseArgs`'s `BridgeOptions | string`
+return without checking, which `tsc` rejected even though the test passed. The
+test now goes through small `parsed` / `parsedStart` helpers that assert the
+shape instead of assuming it. `vitest` transpiles without type-checking, so
+`npm run typecheck` is the gate that catches this class of error.
+
 ## 8. Known Issues
 
 - **Capabilities the frontend needs must be granted explicitly.**
@@ -923,42 +1111,79 @@ Decision               N/A   accepted as environmental; the Exit path and
   unchanged: 1.5 s is the budget for the last unsaved keystroke, and trading it
   for a smaller teardown number would risk losing input to save time the app
   does not control. Do not shorten it to chase the teardown.
+- **A bridge task stays visible for about five minutes after its last report.**
+  Push counts as a heartbeat simply because it arrived, so a repeated identical
+  `POST` still refreshes `received_at`. A `start` with no later call therefore
+  ages out on the normal stale timeout rather than instantly, and a long task
+  must call `update` periodically to stay honestly live. This is the existing
+  push rule, not a bridge defect: the bridge is a push producer like any other,
+  and the fix for a producer that cannot speak often belongs in the protocol (a
+  per-snapshot heartbeat) rather than in one client. Do not special-case the
+  bridge in the registry.
+- **The bridge keeps one session per state directory.** `update`, `done`,
+  `fail` and `cancel` act on whatever `start` last wrote, so two tasks run from
+  the same state directory would overwrite each other's session. Running two
+  harnesses at once means passing a different `--state-dir` (or
+  `STICKY_HARNESS_BRIDGE_DIR`) per task - which is exactly what the two-harness
+  verification did. Per-harness sessions keyed by name would be a reasonable
+  later change; nothing today depends on one directory holding more than one.
+- **A bridge session file that does not parse is treated as absent.** The bridge
+  will not reconstruct a task id from a half-written or hand-edited session, so
+  the answer is "no current task, run start" rather than a guess that could fork
+  a second row. If the app restarted, the registry is empty anyway and `start`
+  is the correct next call.
+- **The bridge is a Node script, so it needs Node 20 or newer** (developed on
+  24, which is what the `bin/` CLI's direct `.ts` import relies on for type
+  stripping). This is a deliberate trade: no second toolchain or build artifact
+  for a reporter, at the cost of a bridge on a machine that has the repo but not
+  Node. The app itself is unaffected either way.
+- **The bridge writes to the user profile, not to `<AppData>`.**
+  `\.sticky-harness\bridge-session.json` belongs to the bridge rather than the
+  app, keeps only five small fields, and is deleted when a task finishes. It
+  holds no logs, no prompts, no conversation and no code, and `--state-dir`
+  moves it anywhere.
+- **`--timeout` is a hung-app guard, not a slow-app budget.** It defaults to
+  2 s and destroys the request when it fires, so a snapshot is either accepted
+  or fails with a readable line; there is no retry and no queue behind it. A
+  harness that must not lose a report should call the bridge again, which is the
+  same idempotent `harness_id` replacement any producer gets.
 
 ## 9. Next Step
 
-Next: Phase 8 — Codex / Harness Bridge Experience
+Next: Phase 9 — Release / Packaging Polish
 
-Phase 7 is done: adapters are configured from a real window, every edit goes
-through the same Rust validation the startup path uses, one bad adapter still
-cannot stop the others, and a hand-edited file can be reloaded without a
-restart. The exit path was investigated and deliberately left alone, because
-the remaining latency is Windows/Tauri/WebView2 teardown rather than anything
-this app controls.
+Phase 8 is done: a harness reports what it is running with `start`, `update` and
+`done`, through the existing protocol, with no SDK and no per-vendor code. Codex
+and DeepSeek both reach the Harness Tasks window as Bridges, and the reasoning
+for refusing a Direct adapter is unchanged (4c). See 4 for what shipped.
 
-What Phase 7 deliberately left alone, and what Phase 8 is for:
+What Phase 8 deliberately left alone, and what Phase 9 is for:
 
-- Someone still has to write the bridge. A Codex or DeepSeek user must produce
-  a JSON file, serve a loopback endpoint, or POST to `/api/harness/snapshot`
-  themselves, and there is no shipped, documented, runnable example of either.
-  Phase 8 is where a bridge becomes a thing a user can actually run and be told
-  how to run honestly - still without the app controlling any harness.
-- The route stays Bridge for both harnesses. Do not re-open Direct until one of
-  them publishes a stable, documented, read-only "currently running" source;
-  `state_5.sqlite` holds session metadata only and `codex app-server` was not
-  reachable here (see 4c). Parsing an internal cache to invent a status would be
-  a regression dressed up as a feature.
+- The app has no release story yet. `npm run tauri build -- --bundles msi` works
+  on this machine but plain `npm run tauri build` cannot finish its NSIS bundle
+  because of an environment-specific cross-drive error (see Known Issues), and
+  nothing has been published, signed or versioned. Packaging, an installer
+  someone else can run, and a first honest release note are the next real
+  product step.
 - The remaining product polish from earlier phases is still open: images,
-  themes, search and a settings window. The adapter window is a settings
-  surface the real settings window should absorb rather than sit beside.
+  themes, search and a settings window. The adapter window and the bridge's
+  `--state-dir` default are both surfaces a real settings window should absorb
+  rather than sit beside.
+- The bridge is documented and runnable but not installed. If a harness wants to
+  report from outside the repo, it currently needs the path to
+  `bin/sticky-harness-bridge.mjs`. A Phase 9 packaging step could ship the
+  bridge next to the app; do not build an installer just for it.
 
 Still out of scope, and still worth refusing:
 
 - No task history, log or tool-call viewer, no terminal, no notifications, no
   SQLite, no cloud, no authentication, no WebSocket or SSE.
-- No remote network. `local-http` means loopback, and it should keep meaning
-  loopback.
-- No Codex or DeepSeek control, and no prompt sending. The app reports; it does
-  not drive anything.
+- No remote network. `local-http` means loopback, and the bridge posts to
+  loopback, and both should keep meaning that.
+- No Codex or DeepSeek control, no prompt sending, and no parsing of a
+  harness's private state. The app reports; it does not drive or snoop.
+- No second bridge, no SDK and no per-vendor adapter without a stable
+  documented source.
 
 ## 10. Latest Commit
 
@@ -981,11 +1206,21 @@ f607205 docs: record the Phase 6 docs commit hash
 8fc785c feat: add adapter management              (Phase 7)
 ```
 
-Every commit is local. Nothing has been pushed. Phase 7 adds the Adapter
-Management window and its commands: `harness/adapters_window.rs` (the window,
-its commands and the validate-then-save-then-apply rule),
-`AdaptersWindow.tsx` plus its styles and command wrappers, the `AdapterStatus`
-/ `AdapterOutcome` surface and `save_config` in `harness/manager.rs`,
-`apply_adapter_config` in `harness/mod.rs`, the tray item in `tray.rs`, and
-the `harness-adapters` capability. `EXIT_FLUSH_TIMEOUT` and the exit path are
-untouched. No existing commit was rewritten or squashed.
+Every commit is local. Nothing has been pushed. Phase 8 adds the harness bridge:
+`src/harness/bridge.ts` (the pure argument parser, session transitions and
+snapshot construction), `src/harness/bridge.test.ts` (42 tests),
+`bin/sticky-harness-bridge.mjs` (the CLI: session file plus one POST to the
+existing endpoint), `examples/run-task.ps1` and `examples/run-task.sh` (report,
+run one command, report the outcome) and the `bridge` script in `package.json`.
+No Rust file, no capability and no existing commit was touched, and nothing was
+rewritten or squashed. The one test-only change outside the new files is the
+`parsed` / `parsedStart` helpers in `bridge.test.ts`, added because `tsc`
+rejected a union narrowing that `vitest` had not caught.
+
+Phase 7 added the Adapter Management window and its commands:
+`harness/adapters_window.rs` (the window, its commands and the
+validate-then-save-then-apply rule), `AdaptersWindow.tsx` plus its styles and
+command wrappers, the `AdapterStatus` / `AdapterOutcome` surface and
+`save_config` in `harness/manager.rs`, `apply_adapter_config` in
+`harness/mod.rs`, the tray item in `tray.rs`, and the `harness-adapters`
+capability. `EXIT_FLUSH_TIMEOUT` and the exit path are untouched.

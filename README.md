@@ -7,6 +7,16 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 8 — Codex / Harness Bridge Experience (Completed)**
+
+A harness can now report what it is doing in three commands, with no SDK and
+no integration code on either side. `sticky-harness-bridge` is a small
+Node script that turns `start`, `update` and `done` into the same snapshot a
+push would carry, so Codex, DeepSeek and a home-grown harness all reach the
+Harness Tasks window through the one protocol. It reports only what you tell
+it: it never reads a harness's files, starts or stops anything, or sends a
+prompt. See **Harness Bridge** below.
+
 **Phase 7 — Adapter Management (Completed)**
 
 Adapters no longer need a hand-edited JSON file. A **Harness Adapters** window in
@@ -123,6 +133,7 @@ Other useful scripts:
 npm run dev        # Vite only, in a browser (no Tauri APIs available)
 npm run typecheck  # TypeScript, no emit
 npm run build      # typecheck + production frontend build
+npm run bridge     # the harness bridge CLI; see Harness Bridge
 ```
 
 ## Build The Windows App
@@ -146,6 +157,7 @@ npm run tauri build -- --bundles msi
 ```text
 sticky-harness/
 ├─ src/                        # React + TypeScript (UI only)
+│  ├─ harness/                 # Elapsed/grouping helpers + the bridge CLI logic
 │  ├─ services/                # Thin wrappers over Rust commands
 │  ├─ types/                   # Shared frontend types
 │  ├─ utils/                   # Small helpers (logging)
@@ -167,6 +179,8 @@ sticky-harness/
 │  │  └─ paths.rs              # The one owner of the local data directory
 │  ├─ capabilities/default.json
 │  └─ tauri.conf.json
+├─ bin/                        # sticky-harness-bridge, the harness-reporting CLI
+├─ examples/                   # Two tiny wrappers: report, run, report the outcome
 ├─ AI_HANDOFF.md               # Living handoff doc for AI-assisted work
 └─ README.md
 ```
@@ -205,6 +219,18 @@ directory, not inside it, because it is not a note:
 
 `src-tauri/src/paths.rs` is the only module that decides this location. Never
 hardcode a path or place user data in the project directory.
+
+The app writes nothing else outside that directory. The one exception is the
+bridge's own session file, which belongs to the bridge rather than the app and
+lives in your user profile:
+
+```text
+%USERPROFILE%\.sticky-harness\bridge-session.json   # current bridge task, if any
+```
+
+It holds five small fields (harness, task id, title, status, message) and is
+deleted as soon as the task finishes. Override the location with `--state-dir`
+or `STICKY_HARNESS_BRIDGE_DIR`.
 
 ## Development Behaviour To Know
 
@@ -245,12 +271,16 @@ hardcode a path or place user data in the project directory.
 - **Harness state is runtime-only.** A harness that reports in is remembered
   until the app exits and is not written to disk, so a restart starts with an
   empty registry. See **Harness Protocol** above.
+- **A harness reports; it is never controlled.** Nothing in this app starts,
+  stops or prompts a harness, and nothing reads a conversation. The bridge
+  sends what you tell it and nothing else. See **Harness Bridge** above.
 
 ## Harness Protocol
 
 A local AI harness can tell this app what it is running by POSTing to a
-loopback-only endpoint. This is the foundation for the Harness Task Note
-(Phase 5); no harness is integrated yet, and nothing is displayed in the UI.
+loopback-only endpoint. It is the foundation for the Harness Task Note
+(Phase 5) and the single place every harness report ends up, whether it
+arrived by push or was read by an adapter.
 
 The server binds `127.0.0.1:17899` only — never `0.0.0.0` — so nothing on your
 network can reach it. State lives in memory and is gone when the app exits.
@@ -374,6 +404,114 @@ producer. The whole Rust exit path runs in a few tens of milliseconds; the secon
 or two that follows is Windows and the WebView2 runtime tearing down the windows,
 which happens with or without adapters.
 
+## Harness Bridge
+
+`sticky-harness-bridge` is the shortest path from "my harness is doing
+something" to a row in the Harness Tasks window. It is a small Node script - the
+same Node the project already needs - with no dependencies and no SDK, and it
+ends in exactly one place: a `HarnessSnapshot` POSTed to the existing loopback
+endpoint. It does not bypass the protocol and it does not have a per-vendor
+code path; Codex, DeepSeek and a script you wrote yourself all use it the same
+way.
+
+```bash
+npm run bridge -- start  --harness codex --name Codex --task "Refactor runtime"
+npm run bridge -- update --message "Running tests"
+npm run bridge -- done
+```
+
+Anywhere outside the repo, call the script directly:
+
+```bash
+node bin/sticky-harness-bridge.mjs start --harness my-bot --task "Index the repo"
+```
+
+| Command | What it reports |
+| --- | --- |
+| `start` | Begins a task, and becomes the current one |
+| `update` | Changes status, message or title of the current task |
+| `done` / `fail` / `cancel` | Finishes it as `completed`, `failed` or `cancelled` |
+
+```text
+start   --harness <id> [--name <label>] --task "<title>" [--task-id <id>] [--status waiting]
+update  [--status running|waiting] [--title "<title>"] [--message "<text>"]
+done | fail | cancel   [--message "<text>"]
+```
+
+Anything that applies to every command:
+
+| Flag | Meaning |
+| --- | --- |
+| `--message "<text>"` | Short status line; `--message ""` clears it |
+| `--port <n>` | Harness port, default 17899 |
+| `--endpoint <url>` | A full loopback endpoint instead of `--port` |
+| `--timeout <ms>` | How long to wait for the app, default 2000 |
+| `--state-dir <path>` | Where the session file lives |
+| `--json` | Also print the snapshot that was sent |
+| `--dry-run` | Print the snapshot and send nothing |
+
+**One task at a time, with a stable id.** `start` writes a tiny session file
+(`%USERPROFILE%\.sticky-harness\bridge-session.json`, or
+`$STICKY_HARNESS_BRIDGE_DIR`) holding the harness, the title and the task id;
+`update`, `done`, `fail` and `cancel` read it, so every call after `start`
+updates the same row instead of adding a new one. The id is derived once from
+the title (`Refactor runtime` becomes `refactor-runtime`) and then never
+recomputed, so renaming a task with `update --title` does not move it either.
+`start` while a task is already current says so on stderr and replaces it;
+saying `done` twice is a warning, not a crash.
+
+The session file holds the harness, the task id, the title, the status and the
+message - no logs, no prompts, no conversation, no code. It is deleted the
+moment a task finishes, so a later `update` says "no current task" rather than
+inventing one. The bridge reads nothing else.
+
+**A bridge reports; it never drives.** It does not start or stop Codex, send a
+prompt, kill an agent, read a conversation, or write a note. It has no opinion
+about what your harness is doing - it only says what you told it.
+
+**When the app is not running** the bridge exits non-zero with one readable
+line and no partial state:
+
+```text
+sticky-harness-bridge: nothing is listening on 127.0.0.1:17899; start Sticky Harness first
+```
+
+`start` before the app is up therefore fails cleanly; run it again once the app
+is running, or start the app first. Nothing is written to the session file until
+the app has accepted the snapshot, so a failed call never leaves a task that
+does not exist.
+
+**Finished tasks leave the window.** `done`, `fail` and `cancel` report a
+terminal status, which is never an active one, so the row leaves the Harness
+Tasks window on the next refresh while the snapshot itself stays in the
+registry, exactly like any other finished task.
+
+**A one-line example that cannot leave a task stuck.** `examples/run-task.ps1`
+and `examples/run-task.sh` wrap one command: they report the start, run the
+work, and then report `done` or `fail` - including when the work crashes, so a
+task never sits in the window after the thing it described is over.
+
+```powershell
+# PowerShell
+.\examples\run-task.ps1 -Harness my-bot -Name "My Bot" -Task "Run the test suite" -Work { npm test }
+```
+
+```sh
+# sh
+./examples/run-task.sh my-bot "Run the test suite" "My Bot" -- npm test
+```
+
+**Bridge, not a Direct adapter.** See
+[Why there is no Codex or DeepSeek adapter](#why-there-is-no-codex-or-deepseek-adapter)
+for why both harnesses use this path.
+
+**One honest limit.** A push counts as a heartbeat simply because it arrived,
+so an identical `POST` still refreshes liveness. A `start` that is never
+followed by anything therefore stays visible for about five minutes (the stale
+timeout) and then drops out on its own. A long-running task should call `update`
+periodically - that is the same rule every push producer follows, not something
+particular to the bridge.
+
 ## Adapter Management
 
 **Tray -> Harness Adapters** opens one window that lists every configured
@@ -426,13 +564,27 @@ tray item reopens it.
 
 ### Why there is no Codex or DeepSeek adapter
 
-Both are supported through the paths above - a bridge process that writes a JSON
-file, serves a loopback endpoint, or POSTs to the push endpoint. They are not
-supported by reading their internal state directly, because on this machine
+Neither gets a vendor-specific adapter, and neither needs one. On this machine
 there is no stable, read-only source for "what is this harness running right
-now". Codex's local database describes past sessions (titles, timestamps,
+now": Codex's local database describes past sessions (titles, timestamps,
 archived flags) and has no notion of a currently running task, so an adapter
-built on it could only report guesses.
+built on it could only report guesses. Reading a private, undocumented cache
+to invent a status would look like an integration while being a liability.
+
+Both are reached through the standard paths instead: `sticky-harness-bridge`
+for push (see **Harness Bridge**), or a local JSON / local HTTP adapter, or a
+direct POST to `/api/harness/snapshot`. That is the same three ways any other
+harness reports in, so adding one stays a command or a configuration rather
+than a new adapter inside the Rust core.
+
+```text
+Codex integration mode: Bridge
+DeepSeek integration mode: Bridge
+```
+
+If either ever publishes a documented, read-only "currently running" source,
+a Direct adapter can be written in front of this protocol without changing it.
+Until then, guessing is not a feature.
 
 ## Roadmap
 
@@ -443,7 +595,8 @@ built on it could only report guesses.
 - Phase 5 — Harness Task Note ✅
 - Phase 6 — Harness Adapters ✅
 - Phase 7 — Adapter Management ✅
-- Phase 8 — Codex / Harness Bridge Experience
+- Phase 8 — Codex / Harness Bridge Experience ✅
+- Phase 9 — Release / Packaging Polish
 
-Phases 1 to 7 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 8 are implemented, and nothing is pushed anywhere. See
 `AI_HANDOFF.md` for the detailed current state and the next step.
