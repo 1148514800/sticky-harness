@@ -1,6 +1,6 @@
 [package]
 name = "sticky-harness"
-version = "0.1.0"
+version = "1.0.0"
 description = "Minimal desktop sticky notes with a local AI harness status panel."
 authors = ["sticky-harness"]
 edition = "2021"

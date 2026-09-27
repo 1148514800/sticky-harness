@@ -7,14 +7,25 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 10 — Final QA / v1.0 Release (Completed)**
+
+**Released: v1.0.0.** `npm run tauri build` produces
+`Sticky Harness_1.0.0_x64_en-US.msi` (2,703,360 bytes, about 2.6 MB) - a
+per-user installer that needs no administrator rights, ships the app and the
+**harness bridge**, and leaves your notes and configuration untouched through
+installing, upgrading and uninstalling. Nothing new was added for 1.0: the
+version was unified across `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`,
+`package.json` and `package-lock.json`, the whole product was re-run on the
+real installer, and the upgrade from 0.1.0 was verified against live data. See
+**Install The App** below.
+
 **Phase 9 — Release / Packaging Polish (Completed)**
 
 Sticky Harness now installs like a normal Windows application. `npm run tauri
-build` produces a per-user MSI (`Sticky Harness_0.1.0_x64_en-US.msi`, about
-2.6 MB) that installs the app, its shortcut and the **harness bridge** into
-`%LOCALAPPDATA%\Programs\Sticky Harness`, so a harness can report in without
-the source tree. Your notes are never touched by installing, upgrading or
-uninstalling. See **Install The App** below.
+build` produces a per-user MSI that installs the app, its shortcut and the
+**harness bridge** into `%LOCALAPPDATA%\Programs\Sticky Harness`, so a harness
+can report in without the source tree. Your notes are never touched by
+installing, upgrading or uninstalling. See **Install The App** below.
 
 **Phase 8 — Codex / Harness Bridge Experience (Completed)**
 
@@ -122,7 +133,7 @@ framework.
 
 ## Install The App
 
-Download or build `Sticky Harness_0.1.0_x64_en-US.msi` and double-click it.
+Download or build `Sticky Harness_1.0.0_x64_en-US.msi` and double-click it.
 It installs per user - no administrator prompt - into
 `%LOCALAPPDATA%\Programs\Sticky Harness`, adds a Start Menu entry and a
 desktop shortcut, and registers an **Uninstall Sticky Harness** entry next to
@@ -222,7 +233,7 @@ The outputs are:
 
 ```text
 src-tauri/target/release/sticky-harness.exe                              # the app
-src-tauri/target/release/bundle/msi/Sticky Harness_0.1.0_x64_en-US.msi   # installer
+src-tauri/target/release/bundle/msi/Sticky Harness_1.0.0_x64_en-US.msi   # installer
 ```
 
 The MSI is per user - it installs to `%LOCALAPPDATA%\Programs\Sticky Harness`
@@ -677,6 +688,46 @@ If either ever publishes a documented, read-only "currently running" source,
 a Direct adapter can be written in front of this protocol without changing it.
 Until then, guessing is not a feature.
 
+## Release Notes — v1.0.0
+
+The first release. Everything is local; there is no account, no sync, no server
+and no data sent off the machine.
+
+- **Sticky notes.** Any number of independent floating notes, each one JSON file,
+  one window and one stable id. Closing a note deletes it; the tray is the
+  permanent entry point, and quitting never deletes anything.
+- **Markdown / Todo.** Notes are edited as rich Markdown with real todo
+  checkboxes, saved automatically shortly after you stop typing.
+- **Tray, Show / Hide, Autostart.** New Note, Show All / Hide All, a real Windows
+  *Start with Windows* toggle and Exit, all from the tray icon.
+- **Harness Protocol.** A small, vendor-neutral local protocol on `127.0.0.1:17899`
+  (`POST /api/harness/snapshot`) for reporting what a harness is running.
+- **Harness Tasks.** A read-only window that shows only the tasks that are live
+  right now, refreshed once a second.
+- **Adapter Management.** A window to add, edit, enable, disable and delete Local
+  JSON and Local HTTP adapters; Rust validates every change before it is written.
+- **Bridge.** `sticky-harness-bridge start|update|done` reports a task from any
+  harness through the same protocol. It ships inside the installer, so no source
+  tree is needed. Codex and DeepSeek both use it - there is no per-vendor
+  integration.
+
+**Known limitations**
+
+- **The MSI is unsigned.** Windows may warn on first run and the publisher reads
+  as unknown; there is no code-signing certificate and no auto-update yet.
+- **The Bridge needs Node.js 23.6+ on `PATH`** (Node 22.6-23.5 with
+  `--experimental-strip-types`). The installer does not bundle a Node runtime; the
+  app itself never needs Node.
+- **NSIS is not built on this machine.** `bundle.targets` is MSI-only because the
+  NSIS bundler cannot extract its own toolchain here - an environment issue, not a
+  project one.
+- **Tray Exit spends a couple of seconds in Windows/WebView2 teardown** after the
+  app itself has already exited (its own exit path finishes in tens of
+  milliseconds). Extra open windows add roughly a second each.
+- **A rare `0xc0000409` hard exit was seen three times and never reproduced.** It
+  is recorded honestly rather than declared fixed. If it recurs, the app writes
+  `%APPDATA%\com.stickyharness.desktop\panic.log` with the location to report.
+
 ## Roadmap
 
 - Phase 1 — Normal sticky notes ✅
@@ -688,7 +739,8 @@ Until then, guessing is not a feature.
 - Phase 7 — Adapter Management ✅
 - Phase 8 — Codex / Harness Bridge Experience ✅
 - Phase 9 — Release / Packaging Polish ✅
-- Phase 10 — Final QA / v1.0 Release
+- Phase 10 — Final QA / v1.0 Release ✅ (v1.0.0)
 
-Phases 1 to 9 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 10 are implemented, and nothing is pushed anywhere. The product
+surface is frozen for v1.0.0; see
 `AI_HANDOFF.md` for the detailed current state and the next step.

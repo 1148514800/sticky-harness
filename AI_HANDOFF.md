@@ -139,40 +139,95 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 9 — Release / Packaging Polish
+Phase 10 — Final QA / v1.0 Release
 
 Status: Completed
 
+Release: v1.0.0
+
 Done:
 
-- Phases 1 to 8: sticky notes, Markdown editing, desktop experience, the local
-  harness protocol, the Harness Task Note, the harness adapters, the Adapter
-  Management window and the harness bridge. See 4b, 4c, 4d and 4e below.
-- **The app installs like a normal Windows program.** `npm run tauri build`
-  produces a per-user MSI (`Sticky Harness_0.1.0_x64_en-US.msi`, about 2.6 MB)
-  that needs no administrator rights, installs to
-  `%LOCALAPPDATA%\Programs\Sticky Harness`, and adds a Start Menu entry, a
-  desktop shortcut and an *Uninstall Sticky Harness* entry. No data format
-  changed, so an old installation's notes read back unchanged.
-- **The bridge ships with the app.** Two `bundle.resources` entries put
-  `bin/sticky-harness-bridge.mjs` and the `src/harness/bridge.ts` it imports
-  next to the executable, so a harness reports in from anywhere with the
-  installed copy rather than the repository. The bridge needs Node 23.6 or newer
-  on `PATH` (Node 22.6-23.5 works with `--experimental-strip-types`); the
-  installer bundles no runtime of its own.
-- **Installing, upgrading and uninstalling leave your data alone.** All three
-  were run against a live data directory: the note, `harness-adapters.json` and
-  `harness-task-window.json` survived each one and came back on reinstall.
-- **A crash is now reportable.** A panic hook writes `<AppData>/panic.log`
-  (timestamp, location, message) before the `panic = "abort"` process dies, so a
-  rare hard exit can be diagnosed instead of guessed at.
-- **Bundling is MSI-only, on purpose.** `bundle.targets` is `["msi"]`: the NSIS
-  bundler cannot extract its own toolchain on this machine, an environment fault
-  reproduced from a pristine scaffold.
+- Phases 1 to 9, unchanged in behaviour: no feature was added, no abstraction
+  moved and no data format changed. See 4b, 4c, 4d, 4e and 4f below.
+- **One version, five files.** `tauri.conf.json`, `Cargo.toml`, the
+  `sticky-harness` entry in `Cargo.lock`, `package.json` and both
+  `package-lock.json` entries all read `1.0.0`, so the installer, the crate and
+  the frontend agree. The bundle identifier is still `com.stickyharness.desktop`
+  and the AppData path did not move, so existing installs upgrade in place.
+- **The upgrade was actually exercised.** The 0.1.0 build already installed here
+  was upgraded with the 1.0.0 MSI: exit 0, one uninstall entry at 1.0.0, and a
+  before/after sha256 of every file under `%APPDATA%\com.stickyharness.desktop`
+  that came back identical.
+- **Everything was re-run on the installed build.** New Note, Markdown and todo,
+  Pin, geometry, Harness Tasks, Harness Adapters, Local JSON and Local HTTP
+  together, the bridge for Codex and DeepSeek, Hide All / Show All, Start with
+  Windows, restart persistence and Tray Exit. A refused adapter edit and a
+  corrupt `harness-adapters.json` both failed safely.
+- **The hard exit was stressed and not reproduced.** Three `0xc0000409` events,
+  all on the same pre-panic-hook build, are recorded honestly rather than
+  explained away. See 4a and Known Issues.
 
 There is no separate integration for Codex or DeepSeek: both report through the
-same bridge, JSON or HTTP path as any other harness. The full Phase 9 write-up is
-in 4f below.
+same bridge, JSON or HTTP path as any other harness, and neither got a Direct
+adapter. The full Phase 10 write-up is in 4a below, and Phase 9's is in 4f.
+
+## 4a. Phase 10 — Final QA / v1.0 Release (Completed)
+
+Done:
+
+- Phases 1 to 9, unchanged: no feature was added, no abstraction changed and no
+  data format moved. This phase is a version bump, a pass over the real installed
+  build and an honest record of what it turned up.
+- **One version, five files.** `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
+  the `sticky-harness` package entry in `src-tauri/Cargo.lock`, `package.json`
+  and both `package-lock.json` entries read `1.0.0`. The installer follows
+  `tauri.conf.json`, so the artifact is `Sticky Harness_1.0.0_x64_en-US.msi`
+  (2,703,360 bytes). `identifier` is still `com.stickyharness.desktop`, so the
+  AppData directory, the notes and every install path are untouched. The `0.1.0`
+  strings that remain in the lockfiles belong to unrelated dependency crates.
+- **The upgrade path is real, not theoretical.** The 0.1.0 build already installed
+  on this machine was upgraded in place with the 1.0.0 MSI: exit 0, a single
+  uninstall entry now reading 1.0.0, the new executable in place, and a
+  before/after sha256 of every file under `%APPDATA%\com.stickyharness.desktop`
+  that came back identical - notes, `harness-adapters.json` and
+  `harness-task-window.json`.
+- **The whole product was re-run on the installed 1.0.0 build:** New Note (tray
+  and in-note `+`), a Markdown heading and a `- [ ]` todo stored and rendered, Pin
+  toggled both ways to disk, geometry written and restored, Harness Tasks, Harness
+  Adapters, a Local JSON adapter and a Local HTTP adapter live at the same time,
+  the bridge driving Codex and DeepSeek (start, update, running<->waiting, `done`,
+  `fail` and `cancel`), Hide All / Show All, Start with Windows ON then OFF,
+  restart persistence, and Tray Exit. A refused adapter edit (empty path, then a
+  duplicate name) and a corrupt `harness-adapters.json` were each refused with a
+  readable message, left the file as it was, kept the other adapters running and
+  did not crash the app.
+- **Tray Exit was measured two ways so the number means something.** The
+  application leaves as soon as it is asked to: `exit_app` - the command the tray
+  Exit item runs - to process-gone measured 20 ms, 47 ms, 61 ms and 76 ms across
+  runs. The seconds that follow are Windows/Tauri/WebView2 teardown, which no part
+  of this app controls, and a tray-click-to-gone figure of ~3.4 s with three
+  windows is that teardown plus ~1 s per extra WebView2 window, not the app's own
+  exit path.
+- **The hard exit was stressed, in a bounded way, and did not reproduce.** Four
+  full launch -> harness churn (8 pushes) -> exit cycles on the 1.0.0 build, plus
+  12 create/close note cycles and 30 snapshot POSTs: the app exited cleanly every
+  time, no `panic.log` was written, and the Windows Error Reporting count for
+  `sticky-harness.exe` stayed at three. No speculative change was made to chase
+  it; writing a fix for a fault that will not reproduce would be guessing.
+- **Nothing temporary shipped.** 73 tracked files, no fixtures, no CDP or
+  UI-Automation helpers, no logs, no scratch scripts; the MSI's own file table
+  holds only the executable, its library, the bridge script and the one module
+  the bridge imports.
+
+Not done (intentionally):
+
+- Code signing, auto-update and MSIX/Store packaging. The MSI is unsigned and
+  there is no update feed; both are distribution decisions with their own key and
+  threat-model questions, and neither belongs in a QA phase.
+- Any change to the exit path, the panic profile or the hard-exit investigation
+  beyond collecting evidence. `panic = "abort"` and the panic hook stay as they
+  are.
+- Any new feature. The product surface is frozen for v1.0.0.
 
 ## 4e. Phase 8 — Codex / Harness Bridge Experience (Completed)
 
@@ -1074,7 +1129,8 @@ cargo test                PASS  117 tests (validation, registry, staleness,
 cargo check --all-targets PASS  (no warnings)
 cargo build               PASS
 npm run tauri build       PASS  MSI: src-tauri/target/release/bundle/msi/
-                                Sticky Harness_0.1.0_x64_en-US.msi
+                                Sticky Harness_0.1.0_x64_en-US.msi  (the 0.1.0
+                                artifact; Phase 10 rebuilt it as 1.0.0)
                                 (2,703,360 bytes, ~2.6 MB);
                                 sticky-harness.exe = 5,396,992 bytes
 ```
@@ -1128,6 +1184,68 @@ One limit is recorded rather than papered over: two `0xc0000409` hard exits were
 observed during this phase and could not be reproduced in 22+ controlled attempts
 afterwards. See Known Issues - the panic hook exists so a recurrence leaves a
 readable location.
+
+Re-run for Phase 10, after unifying the version at 1.0.0. The source is unchanged
+from Phase 9 apart from the five version fields, so the counts are the same:
+
+```
+npm test                  PASS  127 tests (6 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo test                PASS  117 tests
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
+npm run tauri build       PASS  MSI: src-tauri/target/release/bundle/msi/
+                                Sticky Harness_1.0.0_x64_en-US.msi
+                                (2,703,360 bytes, ~2.6 MB);
+                                sticky-harness.exe = 5,396,992 bytes
+```
+
+Phase 10 (Final QA / v1.0), run on the MSI installed per user into
+`%LOCALAPPDATA%\Programs\Sticky Harness`, with a real data directory present
+throughout and, for the upgrade leg, the previous 0.1.0 build already installed.
+Installing and upgrading were real `msiexec` runs; the UI steps were driven
+through the WebView2 CDP endpoint and real Win32 window messages, and helper
+scripts lived outside the repo in `%TEMP%\sh-verify`:
+
+```
+ 1 Version sources   PASS  tauri.conf.json, Cargo.toml, the sticky-harness entry
+                            in Cargo.lock, package.json and both package-lock
+                            entries all read 1.0.0; identifier and AppData path
+                            unchanged; only unrelated crates still say 0.1.0
+ 2 Upgrade 0.1->1.0  PASS  msiexec exit 0 over the installed 0.1.0 build; one
+                            uninstall entry now at 1.0.0; new exe in place; every
+                            file under %APPDATA%\com.stickyharness.desktop
+                            sha256-identical before and after
+ 3 First run / notes PASS  New Note from the tray and from the in-note +; a
+                            Markdown heading and a - [ ] todo stored and rendered;
+                            Pin toggled both ways and read back from disk;
+                            geometry written and restored; close deletes the note
+ 4 Harness Tasks     PASS  empty on fresh data; live rows for every source
+ 5 Adapters          PASS  a Local JSON and a Local HTTP adapter live together,
+                            both ok, both tasks visible at once
+ 6 Bridge            PASS  the installed bridge drove Codex and DeepSeek through
+                            start / update / running<->waiting / done / fail /
+                            cancel; four sources visible simultaneously
+ 7 Bad input         PASS  an unknown option exited non-zero with one readable
+                            line; a refused adapter edit (empty path, duplicate
+                            name) changed nothing and kept the app running
+ 8 Corrupt config    PASS  a malformed harness-adapters.json was reported with
+                            its parse reason, saved nothing, and the app stayed
+                            up with no panic.log
+ 9 Hide / Show All   PASS  every window IsWindowVisible=False with the tray
+                            alive; Show All restored all of them
+10 Start with Win    PASS  ON wrote the Run entry and OFF removed it; left OFF
+11 Restart persist   PASS  notes, content, geometry and adapters all restored
+12 Tray Exit         PASS  exit_app -> process gone in 20-76 ms across runs; the
+                            remaining seconds are Windows/WebView2 teardown
+13 Hard-exit stress  PASS  not reproduced: 4 launch/churn/exit cycles (8 pushes
+                            each), 12 create/close cycles and 30 snapshot POSTs;
+                            no panic.log; WER count stayed at 3
+14 Repo cleanliness  PASS  73 tracked files, no fixtures, CDP/UIA helpers, logs,
+                            scratch scripts or secrets; MSI file table holds only
+                            the exe, its dll, the bridge and its one module
+```
 
 ## 8. Known Issues
 
@@ -1313,16 +1431,22 @@ readable location.
   harness that must not lose a report should call the bridge again, which is the
   same idempotent `harness_id` replacement any producer gets.
 - **A rare hard exit (`0xc0000409`) is documented but not explained.** Windows
-  Error Reporting recorded two `BEX64` events with `ExceptionData 7`
-  (`FAST_FAIL_FATAL_APP_EXIT`) on 2026-09-27, at 13:42:46 and 14:05:48, both
-  faulting in `sticky-harness.exe` at offset `0x741a5`; the second happened while
-  the app sat idle. `FAST_FAIL_FATAL_APP_EXIT` is the abort a `panic = "abort"`
-  release performs, and no panic message or dump was captured. It then resisted
-  22+ controlled reproductions - 30 rapid tray New Notes, adapter-window/new-note
-  sequences, four first-run launches on fresh data, a four-minute idle with 47
-  notes, 24 create/close cycles and a port-conflict second instance all ran clean,
-  with the WER event count flat. It is neither fixed nor explained, and it is not
-  claimed to be: `lib.rs` now installs a panic hook that writes
+  Error Reporting recorded three `BEX64` events with `ExceptionData 7`
+  (`FAST_FAIL_FATAL_APP_EXIT`) on 2026-09-27, at 13:42, 14:05 and 14:38. All three
+  fault in `sticky-harness.exe` at the same offset `0x741a5`, and all three carry
+  the same module timestamp, `0x6ab8aba1` - a release build from about 13:37,
+  made *before* the panic hook existed. The two later builds (`0x6ab8c0ec`, 15:08,
+  and `0x6ab8dc64`, 17:05, which is the 1.0.0 binary) have each now been exercised
+  without a single new event.
+  `FAST_FAIL_FATAL_APP_EXIT` is the abort a `panic = "abort"` release performs,
+  and no panic message or dump was ever captured for it. Across two phases it has
+  resisted 22+ controlled reproductions in Phase 9 (30 rapid tray New Notes,
+  adapter-window/new-note sequences, four first-run launches on fresh data, a
+  four-minute idle with 47 notes, 24 create/close cycles, a port-conflict second
+  instance) and, in Phase 10, four launch -> 8-push harness churn -> exit cycles on
+  the 1.0.0 build, 12 more create/close cycles and 30 snapshot POSTs - all clean,
+  with the WER count flat at three. It is neither fixed nor explained, and it is
+  not claimed to be: `lib.rs` installs a panic hook that writes
   `<AppData>/panic.log` (timestamp, location, message) before the abort, so a
   recurrence leaves a source location instead of a guess - read that file first.
   `panic = "abort"` is deliberately unchanged, because unwinding across the FFI
@@ -1349,28 +1473,33 @@ readable location.
 
 ## 9. Next Step
 
-Next: Phase 10 — Final QA / v1.0 Release
+Maintenance / future improvements
 
-Phase 9 is done: `npm run tauri build` produces a per-user MSI that installs the
-app, its shortcuts and the bridge, the data directory survives an install, an
-upgrade and an uninstall, and a panic hook makes a rare hard exit reportable. See
-4f for what shipped and §7 for the exact MSI path and the run-through.
+v1.0.0 is done: the version is unified, the installer is built and installed, the
+whole product was re-run on it, and the upgrade from 0.1.0 was verified against
+live data. See 4a for what shipped and §7 for the run-through. There is no
+Phase 11; the product surface is frozen and what follows is maintenance.
 
-What Phase 9 deliberately left, and what Phase 10 is for:
+Known work that is *not* scheduled, in rough priority order:
 
-- The release is unsigned and has no auto-update. Signing needs a certificate and
-  a policy decision; auto-update needs a feed and a threat model. Both are the
-  difference between "installs" and "ships to strangers", and neither belongs in
-  a packaging phase.
-- The rare `0xc0000409` exit is documented but not explained (Known Issues).
-  Phase 10 should watch for a recurrence and read `panic.log` if one lands, not
-  close it out on the strength of a failed reproduction.
-- Final QA: a fresh install on a clean Windows profile, a first-run walkthrough,
-  the empty states, and a v1.0 version bump with a release note. The version is
-  still `0.1.0` in both `tauri.conf.json` and `Cargo.toml`.
-- The product polish still open from earlier phases: images, themes, search and a
-  settings window. The adapter window and the bridge's `--state-dir` default
-  remain surfaces a settings window should absorb rather than sit beside.
+- **Sign the MSI and add an update story.** The release is unsigned and has no
+  auto-update. Both need decisions this project cannot make on its own - a
+  certificate and its key handling, and a feed plus a threat model - so they are
+  deliberately not improvised here.
+- **Watch for a recurrence of `0xc0000409`.** It is documented, not explained
+  (Known Issues). If it appears again, read `<AppData>/panic.log` first; the hook
+  exists so the next occurrence can be located rather than guessed at. Do not
+  "fix" it on the strength of a failed reproduction.
+- **Product polish carried over from the early phases:** images, themes, search and
+  a settings window. The adapter window and the bridge's `--state-dir` default are
+  surfaces a settings window should eventually absorb rather than sit beside.
+- **The per-producer heartbeat question.** Staleness is deliberately "last new
+  evidence", so a producer that reports rarely can be hidden between reports. The
+  honest fix is a producer-side `updated_at` bump or a protocol heartbeat field,
+  not loosening the rule; see Known Issues.
+- **A macOS/Linux port.** The product decisions ask for a non-Windows-only
+  architecture, and the seams (paths, tray, autostart, window lifecycle) are
+  isolated enough to make that a real option later. Nothing here is scheduled.
 
 Still out of scope, and still worth refusing:
 
@@ -1382,7 +1511,6 @@ Still out of scope, and still worth refusing:
   harness's private state. The app reports; it does not drive or snoop.
 - No second bridge, no SDK and no per-vendor adapter without a stable
   documented source.
-
 ## 10. Latest Commit
 
 Remote: `https://github.com/1148514800/sticky-harness` (private, default branch
