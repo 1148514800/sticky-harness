@@ -1204,6 +1204,7 @@ b70e5a6 docs: record the Phase 5 commit in the handoff
 393aef5 docs: record the Phase 6 commit in the handoff
 f607205 docs: record the Phase 6 docs commit hash
 8fc785c feat: add adapter management              (Phase 7)
+d815c38 feat: add harness bridge                     (Phase 8)
 ```
 
 Every commit is local. Nothing has been pushed. Phase 8 adds the harness bridge:
