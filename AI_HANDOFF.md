@@ -1403,6 +1403,7 @@ b70e5a6 docs: record the Phase 5 commit in the handoff
 f607205 docs: record the Phase 6 docs commit hash
 8fc785c feat: add adapter management              (Phase 7)
 d815c38 feat: add harness bridge                     (Phase 8)
+85bde2c chore: prepare desktop release             (Phase 9)
 ```
 
 Every commit is local. Nothing has been pushed. Phase 8 adds the harness bridge:
@@ -1433,4 +1434,5 @@ executable, so the installed bridge runs without the repository.
 equal to the bundle identifier, so the hook's log path still has one owner. The
 application name, identifier, executable name and icon are unchanged from earlier
 phases, and no data format, no capability and no exit-path code changed. See 4f
-and §7 for what was verified.
+and §7 for what was verified. It was committed as `85bde2c chore: prepare
+desktop release`.
