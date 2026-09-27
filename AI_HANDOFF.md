@@ -1532,6 +1532,7 @@ f607205 docs: record the Phase 6 docs commit hash
 8fc785c feat: add adapter management              (Phase 7)
 d815c38 feat: add harness bridge                     (Phase 8)
 85bde2c chore: prepare desktop release             (Phase 9)
+0b29754 chore: prepare v1.0 release               (Phase 10, v1.0.0)
 ```
 
 Every commit is local. Nothing has been pushed. Phase 8 adds the harness bridge:
@@ -1564,3 +1565,12 @@ application name, identifier, executable name and icon are unchanged from earlie
 phases, and no data format, no capability and no exit-path code changed. See 4f
 and §7 for what was verified. It was committed as `85bde2c chore: prepare
 desktop release`.
+
+Phase 10 released v1.0.0 and added no feature. `package.json`, `package-lock.json`,
+`src-tauri/Cargo.toml`, the `sticky-harness` entry in `src-tauri/Cargo.lock` and
+`src-tauri/tauri.conf.json` were moved from `0.1.0` to `1.0.0`; `README.md` gained
+the release notes and the version/roadmap updates, and `AI_HANDOFF.md` gained 4a,
+the Phase 10 verification block in §7, the corrected `0xc0000409` record in §8 and
+the Maintenance next step in §9. No Rust source, no capability, no exit-path code
+and no data format changed, and nothing was pushed. Committed as `0b29754 chore:
+prepare v1.0 release`.
