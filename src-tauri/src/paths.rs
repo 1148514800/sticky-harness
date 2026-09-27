@@ -2,6 +2,18 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
 
+/// The name the OS gives this app's data directory. Tauri derives it from the
+/// bundle identifier, so the two must stay equal or a diagnostic written before
+/// the app handle exists would land where the app never looks.
+const APP_DATA_DIR_NAME: &str = "com.stickyharness.desktop";
+
+/// The data directory's name, for the one caller that has to find it without an
+/// app handle: the panic hook, which runs when the process may already be dying.
+/// Every other path is resolved through the functions in this module.
+pub fn app_data_dir_name() -> &'static str {
+    APP_DATA_DIR_NAME
+}
+
 /// Resolve the single, OS-specific app data directory for this app.
 ///
 /// This is the one place that decides where notes, config, harness settings and
@@ -51,4 +63,23 @@ pub fn harness_task_window_config(app: &AppHandle) -> Result<PathBuf, String> {
 /// file simply means no adapters are configured.
 pub fn harness_adapters_config(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(ensure_app_data_dir(app)?.join("harness-adapters.json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name above is the one path fact this module cannot ask Tauri for, so
+    /// it is checked against configuration rather than trusted to stay in sync.
+    #[test]
+    fn the_data_directory_name_matches_the_bundle_identifier() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json should parse");
+
+        assert_eq!(
+            config["identifier"].as_str(),
+            Some(APP_DATA_DIR_NAME),
+            "the app data directory name and the bundle identifier must stay equal"
+        );
+    }
 }

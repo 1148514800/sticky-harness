@@ -7,6 +7,15 @@ Everything stays on your computer. There is no account, no sync and no server.
 
 ## Current Phase
 
+**Phase 9 — Release / Packaging Polish (Completed)**
+
+Sticky Harness now installs like a normal Windows application. `npm run tauri
+build` produces a per-user MSI (`Sticky Harness_0.1.0_x64_en-US.msi`, about
+2.6 MB) that installs the app, its shortcut and the **harness bridge** into
+`%LOCALAPPDATA%\Programs\Sticky Harness`, so a harness can report in without
+the source tree. Your notes are never touched by installing, upgrading or
+uninstalling. See **Install The App** below.
+
 **Phase 8 — Codex / Harness Bridge Experience (Completed)**
 
 A harness can now report what it is doing in three commands, with no SDK and
@@ -102,7 +111,7 @@ framework.
 ## Requirements
 
 - Windows 10/11 (this is the only platform verified so far)
-- [Node.js](https://nodejs.org/) 20 or newer (developed on 24)
+- [Node.js](https://nodejs.org/) 22.12 or newer (developed on 24; the toolchain needs it)
 - [Rust](https://rustup.rs/) 1.77 or newer (developed on 1.91)
 - Microsoft C++ Build Tools (the MSVC linker) — required to compile Rust
 - WebView2 runtime — preinstalled on current Windows 10/11
@@ -111,7 +120,68 @@ framework.
 > Tools installation with the "Desktop development with C++" workload is
 > missing. Installing it fixes the build.
 
-## Install
+## Install The App
+
+Download or build `Sticky Harness_0.1.0_x64_en-US.msi` and double-click it.
+It installs per user - no administrator prompt - into
+`%LOCALAPPDATA%\Programs\Sticky Harness`, adds a Start Menu entry and a
+desktop shortcut, and registers an **Uninstall Sticky Harness** entry next to
+any other Windows program. Launch it from either shortcut, or run
+`sticky-harness.exe` from that folder directly.
+
+### First run
+
+There is no main window and no sign-in. The app starts as a **tray icon** with
+one blank sticky note; the notes *are* the interface. Right-click the tray icon
+(or left-click it) for everything else:
+
+| Tray item | What it does |
+| --- | --- |
+| New Note | Opens another sticky note |
+| Harness Tasks | Opens the panel showing what is running right now |
+| Harness Adapters | Opens the adapter configuration window |
+| Show All Notes / Hide All Notes | Reveals or hides every window |
+| Start with Windows | Ticks or unticks the real Windows autostart entry |
+| Exit | Quits the app and keeps every note |
+
+Closing a note with `X` deletes that note, so **Exit** in the tray is how you
+quit. Harness Tasks and Harness Adapters open empty on a fresh machine and say
+so; nothing is preconfigured and no sample data is installed.
+
+### Where your data lives
+
+```text
+%APPDATA%\com.stickyharness.desktop\
+├─ notes\<note-id>.json        # one file per note; this is your content
+├─ harness-adapters.json       # your adapter configuration
+├─ harness-task-window.json    # the Harness Tasks window's position and Pin
+└─ panic.log                   # written only if the app itself ever crashes
+```
+
+The bridge keeps its own small session file in
+`%USERPROFILE%\.sticky-harness\bridge-session.json`, which is deleted as soon
+as a task finishes. Nothing is written anywhere else, and no data is sent off
+the machine.
+
+`panic.log` is written by the app's own crash handler and only ever appears if
+an internal bug ends the process early. It holds one line - the time, the source
+location and the message - so a crash can be reported instead of guessed at. An
+ordinary run never creates it.
+
+### Upgrade and uninstall
+
+- **Upgrade:** install a newer MSI over the old one. Note files, adapter
+  configuration and window state are all read back unchanged; the installer
+  never touches the data directory.
+- **Uninstall:** use *Uninstall Sticky Harness*, or Apps & features in Windows.
+  The program folder, shortcuts and registry entry are removed; **your notes
+  and configuration are left in place**, so reinstalling brings everything
+  back. Delete `%APPDATA%\com.stickyharness.desktop` yourself if you want them
+  gone for good.
+- **Uninstall does not undo *Start with Windows*.** That is a separate
+  Windows Run entry - turn it off in the tray first if you enabled it.
+
+## Install For Development
 
 ```bash
 npm install
@@ -142,15 +212,23 @@ npm run bridge     # the harness bridge CLI; see Harness Bridge
 npm run tauri build
 ```
 
-Installers and executables are written to `src-tauri/target/release/`
-(and `src-tauri/target/release/bundle/` for installers).
+The release build is configured for **MSI only** (`bundle.targets` in
+`src-tauri/tauri.conf.json`). NSIS is deliberately not attempted: it fails on
+some machines with a cross-drive error while extracting its own toolchain,
+which is an environment problem, not a project one, and a release that cannot
+build everywhere is worse than one installer format.
 
-If the NSIS installer step fails with a cross-drive error while extracting its
-toolchain, build just the MSI instead:
+The outputs are:
 
-```bash
-npm run tauri build -- --bundles msi
+```text
+src-tauri/target/release/sticky-harness.exe                              # the app
+src-tauri/target/release/bundle/msi/Sticky Harness_0.1.0_x64_en-US.msi   # installer
 ```
+
+The MSI is per user - it installs to `%LOCALAPPDATA%\Programs\Sticky Harness`
+and needs no administrator rights or UAC prompt. It bundles the bridge at
+`bin/sticky-harness-bridge.mjs` next to the executable, so an installed copy
+can report to the app without the repository (see **Harness Bridge**).
 
 ## Project Structure
 
@@ -420,11 +498,24 @@ npm run bridge -- update --message "Running tests"
 npm run bridge -- done
 ```
 
-Anywhere outside the repo, call the script directly:
+**Installed with the app.** The MSI copies the bridge next to the executable, so
+once Sticky Harness is installed you can report from anywhere - no repository,
+no `cd` and no `npm`:
 
-```bash
-node bin/sticky-harness-bridge.mjs start --harness my-bot --task "Index the repo"
+```powershell
+$bridge = "$env:LOCALAPPDATA\Programs\Sticky Harness\bin\sticky-harness-bridge.mjs"
+node $bridge start  --harness my-bot --task "Index the repo"
+node $bridge update --message "Halfway"
+node $bridge done
 ```
+
+From a clone the same file is `node bin/sticky-harness-bridge.mjs`, and
+`npm run bridge` is shorthand for exactly that.
+
+The bridge is a Node script, so it needs **Node.js 23.6 or newer** (developed on
+24) on `PATH`; it has no dependencies beyond Node itself. On Node 22.6 to 23.5 it
+runs if you add `--experimental-strip-types`, because it imports one `.ts` module
+directly. The installer does not bundle Node, so Node is the one prerequisite.
 
 | Command | What it reports |
 | --- | --- |
@@ -596,7 +687,8 @@ Until then, guessing is not a feature.
 - Phase 6 — Harness Adapters ✅
 - Phase 7 — Adapter Management ✅
 - Phase 8 — Codex / Harness Bridge Experience ✅
-- Phase 9 — Release / Packaging Polish
+- Phase 9 — Release / Packaging Polish ✅
+- Phase 10 — Final QA / v1.0 Release
 
-Phases 1 to 8 are implemented, and nothing is pushed anywhere. See
+Phases 1 to 9 are implemented, and nothing is pushed anywhere. See
 `AI_HANDOFF.md` for the detailed current state and the next step.

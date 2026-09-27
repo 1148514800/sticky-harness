@@ -139,9 +139,42 @@ on load rather than forking into a second file.
 
 ## 4. Current Phase
 
-Phase 8 — Codex / Harness Bridge Experience
+Phase 9 — Release / Packaging Polish
 
 Status: Completed
+
+Done:
+
+- Phases 1 to 8: sticky notes, Markdown editing, desktop experience, the local
+  harness protocol, the Harness Task Note, the harness adapters, the Adapter
+  Management window and the harness bridge. See 4b, 4c, 4d and 4e below.
+- **The app installs like a normal Windows program.** `npm run tauri build`
+  produces a per-user MSI (`Sticky Harness_0.1.0_x64_en-US.msi`, about 2.6 MB)
+  that needs no administrator rights, installs to
+  `%LOCALAPPDATA%\Programs\Sticky Harness`, and adds a Start Menu entry, a
+  desktop shortcut and an *Uninstall Sticky Harness* entry. No data format
+  changed, so an old installation's notes read back unchanged.
+- **The bridge ships with the app.** Two `bundle.resources` entries put
+  `bin/sticky-harness-bridge.mjs` and the `src/harness/bridge.ts` it imports
+  next to the executable, so a harness reports in from anywhere with the
+  installed copy rather than the repository. The bridge needs Node 23.6 or newer
+  on `PATH` (Node 22.6-23.5 works with `--experimental-strip-types`); the
+  installer bundles no runtime of its own.
+- **Installing, upgrading and uninstalling leave your data alone.** All three
+  were run against a live data directory: the note, `harness-adapters.json` and
+  `harness-task-window.json` survived each one and came back on reinstall.
+- **A crash is now reportable.** A panic hook writes `<AppData>/panic.log`
+  (timestamp, location, message) before the `panic = "abort"` process dies, so a
+  rare hard exit can be diagnosed instead of guessed at.
+- **Bundling is MSI-only, on purpose.** `bundle.targets` is `["msi"]`: the NSIS
+  bundler cannot extract its own toolchain on this machine, an environment fault
+  reproduced from a pristine scaffold.
+
+There is no separate integration for Codex or DeepSeek: both report through the
+same bridge, JSON or HTTP path as any other harness. The full Phase 9 write-up is
+in 4f below.
+
+## 4e. Phase 8 — Codex / Harness Bridge Experience (Completed)
 
 Done:
 
@@ -221,6 +254,66 @@ Not done (intentionally, do not start without a new task):
   control, no prompt sending, no cloud, no SQLite and no remote API.
 - No SDK, plugin loader or scripting host. One bridge, one protocol, and the
   same two adapters remain the whole integration surface.
+
+## 4f. Phase 9 — Release / Packaging Polish (Completed)
+
+Done:
+
+- Phases 1 to 8: sticky notes, Markdown editing, desktop experience, the local
+  harness protocol, the Harness Task Note, the harness adapters, the Adapter
+  Management window and the harness bridge. See 4b, 4c, 4d and 4e below.
+- **The app now installs like a normal Windows program.** `npm run tauri build`
+  produces a per-user MSI - `Sticky Harness_0.1.0_x64_en-US.msi`, about 2.6 MB -
+  that needs no administrator rights and installs to
+  `%LOCALAPPDATA%\Programs\Sticky Harness`, with a Start Menu entry, a desktop
+  shortcut and an *Uninstall Sticky Harness* entry. No data format changed: the
+  installer and the app read the same `<AppData>/com.stickyharness.desktop` files
+  as every earlier phase did.
+- **Bundling is deliberately MSI-only and minimal.** `bundle.targets` is
+  `["msi"]`, because the NSIS bundler cannot extract its own toolchain on this
+  machine (an environment fault, reproduced from a pristine scaffold - see Known
+  Issues), and a release that cannot build everywhere is worse than one installer
+  format. Two `bundle.resources` entries copy `bin/sticky-harness-bridge.mjs` and
+  `src/harness/bridge.ts` next to the executable, so the installed copy of the
+  bridge reports to the app from anywhere without the repository.
+- **Installing touches nothing of yours; uninstalling touches only its own
+  files.** A fresh install, an install-over-install upgrade and an uninstall were
+  each run while a real user-data directory was present: the note,
+  `harness-adapters.json` and `harness-task-window.json` survived all three, and
+  reinstalling brought every one back. Uninstall removed the program folder, both
+  shortcuts and the registry entry, and left `%APPDATA%\com.stickyharness.desktop`
+  untouched. *Start with Windows* is a separate Windows Run entry and is not
+  removed by uninstalling.
+- **A crash now leaves a note behind.** `lib.rs` installs a panic hook before
+  the app is built. Release compiles with `panic = "abort"`, so an internal panic
+  is an instant process death whose message would otherwise go to a stderr a
+  windowed app does not have; the hook still prints, then writes one line -
+  timestamp, location, message - to `<AppData>/panic.log`. `panic = "abort"` is
+  deliberately unchanged: unwinding across the FFI boundary into Tauri/WebView2
+  would be undefined behaviour.
+- **The panic log's path has one owner.** The hook runs before an app handle
+  exists and may run while the process is dying, so it cannot use the Tauri
+  resolver; `paths::app_data_dir_name` is the one place that knows the directory
+  name, and a `paths` test asserts it still equals the bundle `identifier` in
+  `tauri.conf.json`. A hook that quietly wrote somewhere the app never reads
+  would be worse than no hook at all.
+- **A rare hard exit is documented, not hidden.** Two `0xc0000409` events were
+  recorded on 2026-09-27 (see Known Issues); neither could be reproduced in 22+
+  controlled attempts afterwards, so nothing was "fixed" to pretend otherwise.
+  The panic hook above exists so that a recurrence leaves a readable location
+  instead of a guess.
+- **First run is genuinely empty.** With no prior data the app opens one blank
+  note, Harness Tasks and Harness Adapters both say they are empty, and no sample
+  data, test adapter or development path appears anywhere.
+
+Not done (intentionally, do not start without a new task):
+
+- Code signing, auto-update and MSIX/Store packaging. Signing in particular is a
+  distribution step with its own key management and was not attempted, so the
+  MSI is unsigned; NSIS is not attempted on this machine for the reason above.
+- Any change to the data format, and any migration code, because nothing in the
+  format had to change. An install-over-install upgrade reads the old files
+  unchanged.
 
 ## 4d. Phase 7 — Adapter Management / Product Polish (Completed)
 
@@ -423,7 +516,7 @@ src/styles.css                        Minimal note styling
 src-tauri/src/lib.rs                  Setup, command registration, exit veto
 src-tauri/src/notes.rs                Note identity, persistence, window lifecycle
 src-tauri/src/tray.rs                 Tray icon, menu, autostart checkbox
-src-tauri/src/paths.rs                Sole owner of the local data directory
+src-tauri/src/paths.rs                Sole owner of the data directory and its name
 src-tauri/src/harness_window.rs       The Harness Task Note window and its state
 src-tauri/src/harness/mod.rs          Harness wiring, Tauri commands, init
 src-tauri/src/harness/protocol.rs     The protocol model, status enum, constants
@@ -435,7 +528,7 @@ src-tauri/src/harness/adapters_window.rs  Adapter Management window + its comman
 src-tauri/src/harness/tests.rs        Core tests (validation, registry, stale)
 src-tauri/capabilities/default.json   Core permissions for note-*, harness-tasks,
                                       harness-adapters
-src-tauri/tauri.conf.json             No startup window; notes created by Rust
+src-tauri/tauri.conf.json             No startup window; MSI bundle, bundled bridge
 bin/sticky-harness-bridge.mjs         The bridge CLI: session file + one POST
 examples/run-task.ps1                 Report, run one command, report the outcome
 examples/run-task.sh                  The same wrapper for sh
@@ -507,6 +600,10 @@ examples/run-task.sh                  The same wrapper for sh
   anyway: notes and the tray are unaffected.
 - A corrupt or hand-edited note file is logged and skipped without stopping the
   other notes from loading.
+- The release build is one per-user MSI. Installing, upgrading or uninstalling it
+  never touches `%APPDATA%\com.stickyharness.desktop`, the installed copy carries
+  the bridge at `bin\sticky-harness-bridge.mjs`, and an internal crash writes
+  `<AppData>/panic.log` before the process aborts.
 
 ## 7. Verification
 
@@ -964,6 +1061,74 @@ test now goes through small `parsed` / `parsedStart` helpers that assert the
 shape instead of assuming it. `vitest` transpiles without type-checking, so
 `npm run typecheck` is the gate that catches this class of error.
 
+Re-run for Phase 9, after the release configuration, the bundled bridge and the
+panic hook:
+
+```
+npm test                  PASS  127 tests (6 files)
+npm run typecheck         PASS
+npm run build             PASS  (same pre-existing chunk-size warning)
+cargo test                PASS  117 tests (validation, registry, staleness,
+                                adapters, manager config, adapter window,
+                                harness window config, panic log, data dir name)
+cargo check --all-targets PASS  (no warnings)
+cargo build               PASS
+npm run tauri build       PASS  MSI: src-tauri/target/release/bundle/msi/
+                                Sticky Harness_0.1.0_x64_en-US.msi
+                                (2,703,360 bytes, ~2.6 MB);
+                                sticky-harness.exe = 5,396,992 bytes
+```
+
+Phase 9 (Release / Packaging), run against the real MSI installed per user into
+`%LOCALAPPDATA%\Programs\Sticky Harness`, with a live data directory present
+throughout. Installing, upgrading and uninstalling were real `msiexec` runs; the
+UI steps were driven through the WebView2 CDP endpoint and real Win32 window
+messages, and helper scripts lived outside the repo in `%TEMP%\sh-verify`:
+
+```
+ 1 Build              PASS  npm run tauri build produced the MSI above, with the
+                            exe and the bridge resources in the bundle
+ 2 Install (fresh)    PASS  msiexec /qn installs per user with no elevation;
+                            program folder, Start Menu + desktop shortcuts and
+                            the uninstall entry all appear
+ 3 Bundled bridge     PASS  node "<install>\bin\sticky-harness-bridge.mjs" ran
+                            from the install dir; start/update/done reported a
+                            task that appeared in Harness Tasks
+ 4 First run empty    PASS  with no prior data: one blank note, Harness Tasks
+                            "No running tasks", Harness Adapters empty, no
+                            sample data and no development path anywhere
+ 5 Smoke: note        PASS  New Note (tray and in-note +), a Markdown heading and
+                            a - [ ] todo rendered and persisted, Pin toggled both
+                            ways through the real button and written to disk,
+                            geometry round-tripped, and closing a note window
+                            removed its file
+ 6 Smoke: harness     PASS  a Local JSON adapter added through the window showed
+                            its task, and bridge + adapter showed together
+ 7 Hide / Show All    PASS  every window IsWindowVisible=False with the tray
+                            alive; Show All restored all of them
+ 8 Start with Windows PASS  ON wrote the Run entry and OFF removed it; left OFF
+ 9 Tray Exit          PASS  measured from the Exit click to the process being
+                            gone: 1,370 ms with two windows, 3,415 ms with a
+                            third window open - the documented ~2 s teardown plus
+                            ~1 s per window, unchanged by the adapters; notes kept
+10 Upgrade            PASS  a new MSI installed over the old one: new exe in
+                            place, note, adapters and window state unchanged
+11 Uninstall          PASS  program folder, both shortcuts and the registry
+                            entry removed; %APPDATA%\com.stickyharness.desktop
+                            byte-identical afterwards (sha256 per file);
+                            autostart not resurrected
+12 Reinstall          PASS  installed again: correct layout, the note and its
+                            content restored, and the saved adapter configuration
+                            read back (its fixture task reappeared)
+13 Repo cleanup      PASS  73 tracked files, no fixtures, CDP/UIA helpers,
+                            logs, snapshots or secrets; no absolute dev paths
+```
+
+One limit is recorded rather than papered over: two `0xc0000409` hard exits were
+observed during this phase and could not be reproduced in 22+ controlled attempts
+afterwards. See Known Issues - the panic hook exists so a recurrence leaves a
+readable location.
+
 ## 8. Known Issues
 
 - **Capabilities the frontend needs must be granted explicitly.**
@@ -1147,32 +1312,65 @@ shape instead of assuming it. `vitest` transpiles without type-checking, so
   or fails with a readable line; there is no retry and no queue behind it. A
   harness that must not lose a report should call the bridge again, which is the
   same idempotent `harness_id` replacement any producer gets.
+- **A rare hard exit (`0xc0000409`) is documented but not explained.** Windows
+  Error Reporting recorded two `BEX64` events with `ExceptionData 7`
+  (`FAST_FAIL_FATAL_APP_EXIT`) on 2026-09-27, at 13:42:46 and 14:05:48, both
+  faulting in `sticky-harness.exe` at offset `0x741a5`; the second happened while
+  the app sat idle. `FAST_FAIL_FATAL_APP_EXIT` is the abort a `panic = "abort"`
+  release performs, and no panic message or dump was captured. It then resisted
+  22+ controlled reproductions - 30 rapid tray New Notes, adapter-window/new-note
+  sequences, four first-run launches on fresh data, a four-minute idle with 47
+  notes, 24 create/close cycles and a port-conflict second instance all ran clean,
+  with the WER event count flat. It is neither fixed nor explained, and it is not
+  claimed to be: `lib.rs` now installs a panic hook that writes
+  `<AppData>/panic.log` (timestamp, location, message) before the abort, so a
+  recurrence leaves a source location instead of a guess - read that file first.
+  `panic = "abort"` is deliberately unchanged, because unwinding across the FFI
+  boundary to Tauri/WebView2 is undefined behaviour.
+- **The MSI's ProductCode changes on every build.** Upgrading is "install the new
+  MSI over the old one", which the MSI's shared `UpgradeCode` and higher version
+  allow, and it was verified against live data. Uninstalling by script needs the
+  *current* ProductCode, though, because its key is that per-build GUID - read it
+  from the uninstall registry key rather than from a hardcoded value. User data is
+  never part of either operation.
+- **NSIS is deliberately not built.** `bundle.targets` is `["msi"]`: the NSIS
+  bundler cannot extract its own toolchain on this machine (`os error 17`, the
+  same environment quirk as the `fs::rename` failure above), which a pristine
+  `create-tauri-app` scaffold reproduces. A machine without that quirk can build
+  NSIS with `--bundles nsis` and no code change.
+- **The MSI is unsigned.** No code-signing certificate is wired into the build, so
+  Windows may warn on first run and the publisher reads as unknown. Signing is a
+  distribution decision with its own key management and was out of scope here.
+- **The installed bridge needs Node on `PATH`.** The MSI bundles the bridge script
+  and the `.ts` module it imports, but not a Node runtime, so the installed
+  `sticky-harness-bridge` needs Node 23.6+ (Node 22.6-23.5 with
+  `--experimental-strip-types`) just as the repository copy does. The app itself
+  does not use Node at all.
 
 ## 9. Next Step
 
-Next: Phase 9 — Release / Packaging Polish
+Next: Phase 10 — Final QA / v1.0 Release
 
-Phase 8 is done: a harness reports what it is running with `start`, `update` and
-`done`, through the existing protocol, with no SDK and no per-vendor code. Codex
-and DeepSeek both reach the Harness Tasks window as Bridges, and the reasoning
-for refusing a Direct adapter is unchanged (4c). See 4 for what shipped.
+Phase 9 is done: `npm run tauri build` produces a per-user MSI that installs the
+app, its shortcuts and the bridge, the data directory survives an install, an
+upgrade and an uninstall, and a panic hook makes a rare hard exit reportable. See
+4f for what shipped and §7 for the exact MSI path and the run-through.
 
-What Phase 8 deliberately left alone, and what Phase 9 is for:
+What Phase 9 deliberately left, and what Phase 10 is for:
 
-- The app has no release story yet. `npm run tauri build -- --bundles msi` works
-  on this machine but plain `npm run tauri build` cannot finish its NSIS bundle
-  because of an environment-specific cross-drive error (see Known Issues), and
-  nothing has been published, signed or versioned. Packaging, an installer
-  someone else can run, and a first honest release note are the next real
-  product step.
-- The remaining product polish from earlier phases is still open: images,
-  themes, search and a settings window. The adapter window and the bridge's
-  `--state-dir` default are both surfaces a real settings window should absorb
-  rather than sit beside.
-- The bridge is documented and runnable but not installed. If a harness wants to
-  report from outside the repo, it currently needs the path to
-  `bin/sticky-harness-bridge.mjs`. A Phase 9 packaging step could ship the
-  bridge next to the app; do not build an installer just for it.
+- The release is unsigned and has no auto-update. Signing needs a certificate and
+  a policy decision; auto-update needs a feed and a threat model. Both are the
+  difference between "installs" and "ships to strangers", and neither belongs in
+  a packaging phase.
+- The rare `0xc0000409` exit is documented but not explained (Known Issues).
+  Phase 10 should watch for a recurrence and read `panic.log` if one lands, not
+  close it out on the strength of a failed reproduction.
+- Final QA: a fresh install on a clean Windows profile, a first-run walkthrough,
+  the empty states, and a v1.0 version bump with a release note. The version is
+  still `0.1.0` in both `tauri.conf.json` and `Cargo.toml`.
+- The product polish still open from earlier phases: images, themes, search and a
+  settings window. The adapter window and the bridge's `--state-dir` default
+  remain surfaces a settings window should absorb rather than sit beside.
 
 Still out of scope, and still worth refusing:
 
@@ -1225,3 +1423,14 @@ command wrappers, the `AdapterStatus` / `AdapterOutcome` surface and
 `save_config` in `harness/manager.rs`, `apply_adapter_config` in
 `harness/mod.rs`, the tray item in `tray.rs`, and the `harness-adapters`
 capability. `EXIT_FLUSH_TIMEOUT` and the exit path are untouched.
+
+Phase 9 prepared the desktop release. `src-tauri/tauri.conf.json` switched
+`bundle.targets` to `["msi"]` and added two `bundle.resources` entries that copy
+`bin/sticky-harness-bridge.mjs` and `src/harness/bridge.ts` next to the
+executable, so the installed bridge runs without the repository.
+`src-tauri/src/lib.rs` gained the panic hook plus its two tests, and
+`src-tauri/src/paths.rs` gained `app_data_dir_name` and the test that keeps it
+equal to the bundle identifier, so the hook's log path still has one owner. The
+application name, identifier, executable name and icon are unchanged from earlier
+phases, and no data format, no capability and no exit-path code changed. See 4f
+and §7 for what was verified.

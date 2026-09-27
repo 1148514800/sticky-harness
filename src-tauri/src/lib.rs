@@ -4,13 +4,85 @@ mod notes;
 mod paths;
 mod tray;
 
+use std::path::{Path, PathBuf};
+
 use tauri::{Manager, RunEvent};
+
+/// Report a panic somewhere a release user can actually find it.
+///
+/// `release` builds compile with `panic = "abort"`, so a panic in this app is
+/// not a printed message followed by a stack unwinding past the Rust boundary -
+/// it is an immediate process death, and the default hook's message goes to a
+/// stderr that a windowed Windows app does not have. That turns any internal
+/// panic into a silent disappearance from the user's point of view.
+///
+/// This hook keeps the crash a crash (abort is deliberate: unwinding through
+/// the FFI boundary to Tauri/WebView2 is undefined behaviour, so the profile is
+/// not changed here) but writes the panic's location and message to a file
+/// before the process dies, so a report can say what happened instead of
+/// guessing. The file is small, overwritten on each panic, and lives beside the
+/// app's own data rather than in the source tree.
+fn install_panic_logger() {
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|location| {
+                format!("{}:{}:{}", location.file(), location.line(), location.column())
+            })
+            .unwrap_or_else(|| "unknown location".to_string());
+
+        let message = if let Some(text) = info.payload().downcast_ref::<&str>() {
+            (*text).to_string()
+        } else if let Some(text) = info.payload().downcast_ref::<String>() {
+            text.clone()
+        } else {
+            "a panic with no text payload".to_string()
+        };
+
+        // Still print it, because a developer running from a terminal sees it.
+        eprintln!("[sticky-harness] panic at {location}: {message}");
+
+        if let Some(root) = app_data_root() {
+            write_panic_log(&root, now_millis(), &location, &message);
+        }
+    }));
+}
+
+/// Where the panic log goes: the same data directory the rest of the app uses,
+/// resolved through `paths` so the name still has one owner. `None` when the
+/// variable is absent, in which case the panic is still printed and nothing is
+/// written. The hook cannot use the Tauri resolver because it has no app handle
+/// and may run while the process is already dying.
+fn app_data_root() -> Option<PathBuf> {
+    let base = std::env::var_os("APPDATA")?;
+    Some(PathBuf::from(base).join(paths::app_data_dir_name()))
+}
+
+/// Write one line describing a panic. Returns the path it wrote, if it could.
+///
+/// Failures are deliberately swallowed: a panic is already the worst moment for
+/// the process, and a diagnostic that itself panics would hide the original.
+fn write_panic_log(root: &Path, stamp: u64, location: &str, message: &str) -> Option<PathBuf> {
+    std::fs::create_dir_all(root).ok()?;
+    let path = root.join("panic.log");
+    std::fs::write(&path, format!("{stamp}\t{location}\t{message}\n")).ok()?;
+    Some(path)
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Start the desktop app.
 ///
 /// Window lifecycle, note persistence, the tray and local paths all live in
 /// Rust; the React layer only renders UI and calls commands.
 pub fn run() {
+    install_panic_logger();
+
     let app = match tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         // OS launch-at-startup is owned entirely by the official plugin:
@@ -118,4 +190,38 @@ pub fn run() {
             app_handle.state::<harness::HarnessState>().stop_adapters();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The panic log is the only thing a release user can report, so it has to
+    /// actually land where the app can find it again.
+    #[test]
+    fn the_panic_log_records_the_location_and_message() {
+        let dir = std::env::temp_dir().join(format!("sticky-harness-panic-test-{}", now_millis()));
+        let path = write_panic_log(&dir, 1234, "src-tauri/src/lib.rs:1:1", "something broke")
+            .expect("the panic log should be written");
+
+        let written = std::fs::read_to_string(&path).expect("the panic log should be readable");
+        assert_eq!(written, "1234\tsrc-tauri/src/lib.rs:1:1\tsomething broke\n");
+        assert_eq!(path, dir.join("panic.log"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A directory that cannot be created must not turn a panic into a second
+    /// panic; the diagnostic is best-effort by design.
+    #[test]
+    fn an_unwritable_root_is_not_fatal() {
+        let file = std::env::temp_dir().join(format!("sticky-harness-panic-file-{}", now_millis()));
+        std::fs::write(&file, "not a directory").expect("the fixture file should be writable");
+
+        // A path whose parent is a regular file cannot be a directory.
+        let impossible = file.join("nested");
+        assert!(write_panic_log(&impossible, 1, "here", "boom").is_none());
+
+        std::fs::remove_file(&file).ok();
+    }
 }
