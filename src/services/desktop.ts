@@ -53,6 +53,10 @@ export async function confirmExitFlush(id: string): Promise<void> {
   return callCommand<void>("confirm_exit_flush", { id });
 }
 
+/** Open the Harness Tasks window, creating it if needed. */
+export async function openHarnessTasksWindow(): Promise<boolean> {
+  return callCommand<boolean>("open_harness_tasks_window");
+}
 /** Turn always-on-top on or off for one note, in the OS and on disk. */
 export async function setNotePinned(id: string, pinned: boolean): Promise<void> {
   return callCommand<void>("set_note_pinned", { id, pinned });
@@ -129,6 +133,10 @@ export async function reloadAdapters(): Promise<AdaptersView> {
   return callCommand<AdaptersView>("reload_adapters");
 }
 
+/** Open the Harness Adapters management window, creating it if needed. */
+export async function openAdaptersWindow(): Promise<boolean> {
+  return callCommand<boolean>("open_adapters_window");
+}
 /** Whether the Harness Task Note exists, is visible, and is pinned. */
 export async function getHarnessWindowStatus(): Promise<HarnessWindowStatus> {
   return callCommand<HarnessWindowStatus>("harness_window_status");

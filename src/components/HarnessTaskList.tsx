@@ -25,7 +25,7 @@ export function HarnessTaskList({ tasks, now }: HarnessTaskListProps) {
   const groups = groupByHarness(tasks);
 
   if (groups.length === 0) {
-    return <p className="harness__empty">No running tasks</p>;
+    return <p className="harness__empty">当前没有运行中的任务</p>;
   }
 
   return (

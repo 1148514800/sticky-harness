@@ -119,7 +119,8 @@ fn write_config(path: &Path, config: &HarnessWindowConfig) -> Result<(), String>
         .map_err(|error| format!("could not serialise the harness window config: {error}"))?;
 
     let temp = path.with_extension("json.tmp");
-    fs::write(&temp, json).map_err(|error| format!("could not write {}: {error}", temp.display()))?;
+    fs::write(&temp, json)
+        .map_err(|error| format!("could not write {}: {error}", temp.display()))?;
 
     if let Err(rename_error) = fs::rename(&temp, path) {
         if let Err(copy_error) = fs::copy(&temp, path) {
@@ -165,7 +166,13 @@ fn default_position(app: &AppHandle) -> PhysicalPosition<i32> {
 }
 
 /// Whether a rect still overlaps some existing monitor enough to be usable.
-fn rect_visible(x: i32, y: i32, width: u32, height: u32, monitors: &[(i32, i32, u32, u32)]) -> bool {
+fn rect_visible(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    monitors: &[(i32, i32, u32, u32)],
+) -> bool {
     monitors.iter().any(|(mx, my, mw, mh)| {
         let overlap_x = (x + width as i32).min(mx + *mw as i32) - x.max(*mx);
         let overlap_y = (y + height as i32).min(my + *mh as i32) - y.max(*my);
@@ -191,7 +198,10 @@ fn monitor_bounds(app: &AppHandle) -> Vec<(i32, i32, u32, u32)> {
 /// Apply saved geometry, keeping the window reachable on a monitor that exists.
 fn apply_config(app: &AppHandle, window: &WebviewWindow, config: &HarnessWindowConfig) {
     let width = config.width.unwrap_or(DEFAULT_WIDTH).max(MIN_WIDTH as u32);
-    let height = config.height.unwrap_or(DEFAULT_HEIGHT).max(MIN_HEIGHT as u32);
+    let height = config
+        .height
+        .unwrap_or(DEFAULT_HEIGHT)
+        .max(MIN_HEIGHT as u32);
 
     if let Err(error) = window.set_size(PhysicalSize::new(width, height)) {
         eprintln!("[sticky-harness] could not restore the harness window size: {error}");
@@ -333,6 +343,8 @@ pub fn open(app: &AppHandle) -> Result<bool, String> {
 }
 
 /// Recreate the window on startup, but only if the user ever opened it.
+/// (Disabled: startup should restore only notes; tasks open manually.)
+#[allow(dead_code)]
 ///
 /// Harness *state* is not restored - the registry starts empty on purpose - so
 /// the window comes back showing "No running tasks" until a harness reports.
@@ -407,6 +419,12 @@ pub fn hide_if_open(app: &AppHandle) -> bool {
     true
 }
 
+/// Open the Harness Tasks window, creating it if needed.
+#[tauri::command]
+pub async fn open_harness_tasks_window(app: AppHandle) -> Result<bool, String> {
+    open(&app)
+}
+
 /// Whether the window exists and is currently on screen.
 #[tauri::command]
 pub async fn harness_window_status(app: AppHandle) -> Result<HarnessWindowStatus, String> {
@@ -469,22 +487,26 @@ mod tests {
     fn an_empty_config_is_not_created() {
         let parsed: HarnessWindowConfig = serde_json::from_str("{}").unwrap();
 
-        assert!(!parsed.created, "an absent file must not restore the window");
+        assert!(
+            !parsed.created,
+            "an absent file must not restore the window"
+        );
         assert!(parsed.x.is_none());
         assert!(!parsed.always_on_top);
     }
 
     #[test]
     fn a_partial_config_loads_and_only_carries_what_it_has() {
-        let parsed: HarnessWindowConfig = serde_json::from_str(
-            r#"{ "created": true, "width": 400, "height": 500 }"#,
-        )
-        .unwrap();
+        let parsed: HarnessWindowConfig =
+            serde_json::from_str(r#"{ "created": true, "width": 400, "height": 500 }"#).unwrap();
 
         assert!(parsed.created);
         assert_eq!(parsed.width, Some(400));
         assert_eq!(parsed.height, Some(500));
-        assert!(parsed.x.is_none(), "missing geometry falls back, it does not fail");
+        assert!(
+            parsed.x.is_none(),
+            "missing geometry falls back, it does not fail"
+        );
         assert!(!parsed.always_on_top);
     }
 

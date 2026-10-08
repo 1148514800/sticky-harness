@@ -47,7 +47,7 @@ export function HarnessTaskWindow() {
       setLoaded(true);
     } catch (cause) {
       logError("could not refresh harness tasks", cause);
-      setError("Harness tasks could not be loaded.");
+      setError("任务列表加载失败。");
     } finally {
       pollingRef.current = false;
     }
@@ -124,16 +124,16 @@ export function HarnessTaskWindow() {
   return (
     <div className="note harness">
       <div className="note__bar">
-        <span className="harness__heading">Harness Tasks</span>
+        <span className="harness__heading">任务面板</span>
 
         <button
           type="button"
           className={pinned ? "note__button note__button--active" : "note__button"}
           onClick={handleTogglePin}
-          title={pinned ? "Unpin (always on top)" : "Pin (always on top)"}
+          title={pinned ? "取消置顶" : "置顶"}
           aria-pressed={pinned}
         >
-          Pin
+          置顶
         </button>
       </div>
 

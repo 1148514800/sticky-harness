@@ -27,7 +27,12 @@ fn install_panic_logger() {
         let location = info
             .location()
             .map(|location| {
-                format!("{}:{}:{}", location.file(), location.line(), location.column())
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
             })
             .unwrap_or_else(|| "unknown location".to_string());
 
@@ -104,6 +109,7 @@ pub fn run() {
             harness::list_active_harness_tasks,
             harness::list_live_active_harness_tasks,
             harness::list_harness_snapshots,
+            harness_window::open_harness_tasks_window,
             harness_window::harness_window_status,
             harness_window::set_harness_window_pinned,
             harness::harness_api_port,
@@ -126,10 +132,7 @@ pub fn run() {
             // Adapters need the app data directory, so they start after the
             // handle exists. A configuration problem leaves the push endpoint
             // working and the adapters empty, never the app broken.
-            harness::start_adapters(
-                &handle,
-                &app.state::<harness::HarnessState>(),
-            );
+            harness::start_adapters(&handle, &app.state::<harness::HarnessState>());
 
             // Resolving the app data dir here gives an early, loggable
             // confirmation of where user notes live.
@@ -152,15 +155,6 @@ pub fn run() {
                     Err(error) => eprintln!("[sticky-harness] could not restore notes: {error}"),
                 }
 
-                // The Harness Task Note restores separately: it is not a note,
-                // and it only comes back if the user ever opened it.
-                match harness_window::restore(&handle) {
-                    Ok(true) => println!("[sticky-harness] restored the harness tasks window"),
-                    Ok(false) => {}
-                    Err(error) => eprintln!(
-                        "[sticky-harness] could not restore the harness tasks window: {error}"
-                    ),
-                }
             });
 
             Ok(())

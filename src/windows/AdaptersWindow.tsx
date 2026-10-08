@@ -53,7 +53,7 @@ export function AdaptersWindow() {
       setLoaded(true);
     } catch (cause) {
       logError("could not read the adapters", cause);
-      setProblem("Adapters could not be loaded.");
+      setProblem("适配器加载失败。");
     } finally {
       pollingRef.current = false;
     }
@@ -135,7 +135,7 @@ export function AdaptersWindow() {
   const submit = useCallback(async () => {
     if (!editing) return;
     const previous = editingNameRef.current;
-    const ok = await mutate(previous ? "Adapter saved" : "Adapter added", () =>
+    const ok = await mutate(previous ? "适配器已保存" : "适配器已添加", () =>
       saveAdapter(editing, previous),
     );
     if (ok) cancelEdit();
@@ -144,8 +144,8 @@ export function AdaptersWindow() {
   if (!loaded && adapters.length === 0) {
     return (
       <main className="adapters">
-        <h1 className="adapters__title">Harness Adapters</h1>
-        <p className="adapters__empty">Loading adapters…</p>
+        <h1 className="adapters__title">适配器管理</h1>
+        <p className="adapters__empty">正在加载适配器…</p>
       </main>
     );
   }
@@ -153,17 +153,17 @@ export function AdaptersWindow() {
   return (
     <main className="adapters">
       <header className="adapters__header">
-        <h1 className="adapters__title">Harness Adapters</h1>
+        <h1 className="adapters__title">适配器管理</h1>
         <p className="adapters__subtitle">
           {running === 0
-            ? "No adapters running."
-            : `${running} of ${adapters.length} adapter(s) running.`}
+            ? "当前没有运行中的适配器。"
+            : `共 ${adapters.length} 个适配器，${running} 个运行中。`}
         </p>
       </header>
 
       {fileProblem && (
         <p className="adapters__problem">
-          harness-adapters.json could not be read: {fileProblem}
+          无法读取 harness-adapters.json：{fileProblem}
         </p>
       )}
 
@@ -176,8 +176,8 @@ export function AdaptersWindow() {
       {adapters.length === 0 ? (
         <p className="adapters__empty">
           {fileProblem
-            ? "Fix the file above, or save an adapter below to replace it."
-            : "No adapters configured. Add one below, or let a harness POST to the local endpoint."}
+            ? "请修复上述文件，或在下方保存一个适配器以替换它。"
+            : "尚未配置适配器。可在下方添加，或让本机 Harness 向本地端点上报。"}
         </p>
       ) : (
         <ul className="adapters__list">
@@ -202,21 +202,21 @@ export function AdaptersWindow() {
                     disabled={busy}
                     onChange={(event) =>
                       void mutate(
-                        event.target.checked ? "Adapter enabled" : "Adapter disabled",
+                        event.target.checked ? "适配器已启用" : "适配器已停用",
                         () => setAdapterEnabled(adapter.name, event.target.checked),
                       )
                     }
                   />
-                  Enabled
+                  启用
                 </label>
                 <button type="button" disabled={busy} onClick={() => startEdit(adapter)}>
-                  Edit
+                  编辑
                 </button>
                 <button
                   type="button"
                   disabled={busy}
                   onClick={() =>
-                    void mutate("Adapter removed", () => deleteAdapter(adapter.name))
+                    void mutate("适配器已删除", () => deleteAdapter(adapter.name))
                   }
                 >
                   Delete
@@ -238,12 +238,12 @@ export function AdaptersWindow() {
       ) : (
         <div className="adapters__add">
           <button type="button" disabled={busy} onClick={() => startAdd("local-json")}>
-            Add Local JSON
+            添加本地 JSON
           </button>
           <button type="button" disabled={busy} onClick={() => startAdd("local-http")}>
-            Add Local HTTP
+            添加本地 HTTP
           </button>
-          <button type="button" disabled={busy} onClick={() => void mutate("Adapters reloaded", reloadAdapters)}>
+          <button type="button" disabled={busy} onClick={() => void mutate("适配器已重新加载", reloadAdapters)}>
             Reload
           </button>
         </div>
@@ -277,7 +277,7 @@ function AdapterForm({
       }}
     >
       <label className="adapters__field">
-        Name
+        名称
         <input
           value={value.name}
           onChange={(event) => onChange({ ...value, name: event.target.value })}
@@ -286,19 +286,19 @@ function AdapterForm({
       </label>
 
       <label className="adapters__field">
-        Type
+        类型
         <select
           value={value.kind}
           onChange={(event) => onChange({ ...value, kind: event.target.value as AdapterKind })}
         >
-          <option value="local-json">local-json</option>
-          <option value="local-http">local-http</option>
+          <option value="local-json">本地 JSON 文件</option>
+          <option value="local-http">本地 HTTP 接口</option>
         </select>
       </label>
 
       {isJson ? (
         <label className="adapters__field">
-          Path
+          路径
           <input
             value={value.path ?? ""}
             onChange={(event) => onChange({ ...value, path: event.target.value })}
@@ -308,7 +308,7 @@ function AdapterForm({
       ) : (
         <>
           <label className="adapters__field">
-            Port
+            端口
             <input
               type="number"
               value={value.port ?? ""}
@@ -321,7 +321,7 @@ function AdapterForm({
             />
           </label>
           <label className="adapters__field">
-            Path
+            路径
             <input
               value={value.http_path ?? ""}
               onChange={(event) => onChange({ ...value, http_path: event.target.value })}
@@ -333,10 +333,10 @@ function AdapterForm({
 
       <div className="adapters__form-actions">
         <button type="submit" disabled={busy}>
-          Save
+          保存
         </button>
         <button type="button" disabled={busy} onClick={onCancel}>
-          Cancel
+          取消
         </button>
       </div>
     </form>

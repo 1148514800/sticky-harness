@@ -51,16 +51,16 @@ function pad(value: number): string {
 export function formatStatus(status: string): string {
   switch (status) {
     case "running":
-      return "Running";
+      return "运行中";
     case "waiting":
-      return "Waiting";
+      return "等待中";
     case "failed":
-      return "Failed";
+      return "失败";
     case "completed":
-      return "Completed";
+      return "已完成";
     case "cancelled":
-      return "Cancelled";
+      return "已取消";
     default:
-      return "Unknown";
+      return "未知";
   }
 }

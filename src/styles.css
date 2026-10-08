@@ -86,6 +86,41 @@ body {
   border-color: #2a63d2;
 }
 
+.note__add {
+  position: relative;
+  flex: none;
+}
+
+.note__menu {
+  position: absolute;
+  z-index: 20;
+  top: 28px;
+  left: 0;
+  display: flex;
+  min-width: 112px;
+  padding: 4px;
+  background-color: #ffffff;
+  border: 1px solid #e2e4e8;
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(31, 35, 40, 0.12);
+}
+
+.note__menu button {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  color: #3a4046;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+}
+
+.note__menu button:hover {
+  color: #1f2328;
+  background-color: #f2f4f7;
+}
 /* The editor fills the rest of the window and reads as note paper, not a form. */
 .note__editor-host {
   display: flex;

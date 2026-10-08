@@ -60,36 +60,34 @@ pub fn set_autostart(app: &AppHandle, enable: bool) -> bool {
 /// The tray is the app's permanent entry point: hiding or deleting every note
 /// must leave it alive, so the user can always create or reveal a note again.
 pub fn init(app: &AppHandle) -> Result<(), String> {
-    let new_note_item = MenuItem::with_id(app, MENU_ID_NEW_NOTE, "New Note", true, None::<&str>)
+    let new_note_item = MenuItem::with_id(app, MENU_ID_NEW_NOTE, "新建便签", true, None::<&str>)
         .map_err(|error| format!("could not build the tray \"New Note\" item: {error}"))?;
     let harness_item =
-        MenuItem::with_id(app, MENU_ID_HARNESS_TASKS, "Harness Tasks", true, None::<&str>)
-            .map_err(|error| {
-                format!("could not build the tray \"Harness Tasks\" item: {error}")
-            })?;
+        MenuItem::with_id(app, MENU_ID_HARNESS_TASKS, "任务面板", true, None::<&str>)
+            .map_err(|error| format!("could not build the tray \"Harness Tasks\" item: {error}"))?;
     let adapters_item = MenuItem::with_id(
         app,
         MENU_ID_HARNESS_ADAPTERS,
-        "Harness Adapters",
+        "适配器管理",
         true,
         None::<&str>,
     )
     .map_err(|error| format!("could not build the tray \"Harness Adapters\" item: {error}"))?;
-    let show_item = MenuItem::with_id(app, MENU_ID_SHOW_ALL, "Show All Notes", true, None::<&str>)
+    let show_item = MenuItem::with_id(app, MENU_ID_SHOW_ALL, "显示全部窗口", true, None::<&str>)
         .map_err(|error| format!("could not build the tray \"Show All Notes\" item: {error}"))?;
-    let hide_item = MenuItem::with_id(app, MENU_ID_HIDE_ALL, "Hide All Notes", true, None::<&str>)
+    let hide_item = MenuItem::with_id(app, MENU_ID_HIDE_ALL, "隐藏全部窗口", true, None::<&str>)
         .map_err(|error| format!("could not build the tray \"Hide All Notes\" item: {error}"))?;
     let autostart_item = CheckMenuItem::with_id(
         app,
         MENU_ID_AUTOSTART,
-        "Start with Windows",
+        "随 Windows 启动",
         true,
         // Start from the real OS state so the tick is honest on the first open.
         autostart_enabled(app),
         None::<&str>,
     )
     .map_err(|error| format!("could not build the tray \"Start with Windows\" item: {error}"))?;
-    let exit_item = MenuItem::with_id(app, MENU_ID_EXIT, "Exit", true, None::<&str>)
+    let exit_item = MenuItem::with_id(app, MENU_ID_EXIT, "退出", true, None::<&str>)
         .map_err(|error| format!("could not build the tray \"Exit\" item: {error}"))?;
 
     let first_separator = PredefinedMenuItem::separator(app)

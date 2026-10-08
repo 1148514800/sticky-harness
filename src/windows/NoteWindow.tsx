@@ -6,6 +6,8 @@ import {
   EXIT_REQUESTED_EVENT,
   confirmExitFlush,
   createNote,
+  openAdaptersWindow,
+  openHarnessTasksWindow,
   getNote,
   saveNoteContent,
   setNotePinned,
@@ -197,8 +199,40 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
     };
   }, [flushPendingSave, noteId]);
 
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      setMenuVisible(false);
+      return;
+    }
+    setMenuVisible(true);
+    const unlisten = getCurrentWindow().onCloseRequested(closeMenu);
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, [closeMenu, menuOpen]);
+
+  const toggleMenu = useCallback(() => {
+    setMenuOpen((open) => !open);
+  }, []);
+
   const handleCreateNote = useCallback(() => {
     createNote().catch((cause: unknown) => logError("could not create a note", cause));
+    setMenuOpen(false);
+  }, []);
+
+  const handleOpenHarnessTasks = useCallback(() => {
+    openHarnessTasksWindow().catch((cause: unknown) => logError("could not open harness tasks", cause));
+    setMenuOpen(false);
+  }, []);
+
+  const handleOpenAdapters = useCallback(() => {
+    openAdaptersWindow().catch((cause: unknown) => logError("could not open harness adapters", cause));
+    setMenuOpen(false);
   }, []);
 
   const handleTogglePin = useCallback(() => {
@@ -213,20 +247,42 @@ export function NoteWindow({ noteId }: NoteWindowProps) {
   return (
     <div className="note">
       <div className="note__bar">
-        <button type="button" className="note__button" onClick={handleCreateNote} title="New note">
-          +
-        </button>
+        <div className="note__add">
+          <button
+            type="button"
+            className="note__button"
+            onClick={toggleMenu}
+            title="新建"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+          >
+            +
+          </button>
+          {menuVisible && (
+            <div className="note__menu" role="menu">
+              <button type="button" role="menuitem" onClick={handleCreateNote}>
+                普通便签
+              </button>
+              <button type="button" role="menuitem" onClick={handleOpenHarnessTasks}>
+                任务面板
+              </button>
+              <button type="button" role="menuitem" onClick={handleOpenAdapters}>
+                适配器管理
+              </button>
+            </div>
+          )}
+        </div>
 
-        <span className="note__status">{saveState === "error" ? "Not saved" : ""}</span>
+        <span className="note__status">{saveState === "error" ? "未保存" : ""}</span>
 
         <button
           type="button"
           className={pinned ? "note__button note__button--active" : "note__button"}
           onClick={handleTogglePin}
-          title={pinned ? "Unpin (always on top)" : "Pin (always on top)"}
+          title={pinned ? "取消置顶" : "置顶"}
           aria-pressed={pinned}
         >
-          Pin
+          置顶
         </button>
       </div>
 

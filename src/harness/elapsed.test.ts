@@ -41,18 +41,18 @@ describe("formatElapsed", () => {
 
 describe("formatStatus", () => {
   it("labels the two statuses the note normally shows", () => {
-    expect(formatStatus("running")).toBe("Running");
-    expect(formatStatus("waiting")).toBe("Waiting");
+    expect(formatStatus("running")).toBe("运行中");
+    expect(formatStatus("waiting")).toBe("等待中");
   });
 
   it("labels the remaining protocol statuses rather than leaking the raw value", () => {
-    expect(formatStatus("completed")).toBe("Completed");
-    expect(formatStatus("cancelled")).toBe("Cancelled");
-    expect(formatStatus("failed")).toBe("Failed");
-    expect(formatStatus("unknown")).toBe("Unknown");
+    expect(formatStatus("completed")).toBe("已完成");
+    expect(formatStatus("cancelled")).toBe("已取消");
+    expect(formatStatus("failed")).toBe("失败");
+    expect(formatStatus("unknown")).toBe("未知");
   });
 
-  it("falls back to Unknown for a value it does not recognise", () => {
-    expect(formatStatus("something-new")).toBe("Unknown");
+  it("未知状态会回退为“未知”", () => {
+    expect(formatStatus("something-new")).toBe("未知");
   });
 });
